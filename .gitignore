@@ -1,0 +1,6 @@
+.knowledges/
+knl-config.json
+node_modules/
+dist/
+.codex/
+.opencode/

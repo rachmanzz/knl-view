@@ -1,0 +1,33 @@
+{
+  "name": "knl-view",
+  "version": "0.1.0",
+  "description": "Viewer lokal untuk basis pengetahuan .knowledges: CLI dan tampilan web.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "knl-view": "bin/knl-view.js"
+  },
+  "files": [
+    "bin",
+    "server",
+    "dist"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "build": "vite build",
+    "start": "node bin/knl-view.js"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "dependencies": {
+    "marked": "^18.1.1",
+    "mermaid": "^12.2.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.2",
+    "vite": "^8.3.4"
+  }
+}

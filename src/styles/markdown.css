@@ -1,0 +1,332 @@
+/* ============================================================
+   markdown.css — isi dokumen
+   Sans untuk bacaan (Swiss), band kode di atas panel tersier,
+   tabel bergaris horizontal. Elemen tidak boleh meluber ke
+   samping: overflow-x ada pada pre dan tabel, teks membelah
+   diri sendiri.
+   ============================================================ */
+
+.md {
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* --- Judul --- */
+
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  font-family: var(--sans);
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  scroll-margin-top: calc(var(--topbar-h) + var(--s-4));
+  overflow-wrap: anywhere;
+}
+
+.md h1 {
+  font-size: 1.9em;
+  margin: 0 0 var(--s-4);
+}
+
+.md h2 {
+  font-size: 1.4em;
+  margin-top: var(--s-7);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--ink);
+}
+
+.md h3 {
+  font-size: 1.16em;
+  margin-top: var(--s-6);
+}
+
+.md h4 {
+  font-size: 1em;
+  margin-top: var(--s-5);
+  color: var(--ink-2);
+}
+
+.md h5,
+.md h6 {
+  font-size: 0.95em;
+  margin-top: var(--s-5);
+  color: var(--ink-2);
+}
+
+.md > :first-child {
+  margin-top: 0;
+}
+
+/* --- Paragraf & jarak vertikal --- */
+
+.md p,
+.md ul,
+.md ol,
+.md blockquote,
+.md pre,
+.md table,
+.md figure,
+.md dl {
+  margin-top: var(--s-4);
+}
+
+/* --- Tautan: hitam bergaris, merah hanya saat hover --- */
+
+.md a {
+  color: var(--ink);
+}
+
+.md a:hover {
+  color: var(--accent-strong);
+  text-decoration-thickness: 2px;
+}
+
+/* Tautan eksternal dibuka di tab baru: beri tanda kecil. */
+.md a[target="_blank"]::after {
+  content: " \2197";
+  font-size: 0.75em;
+  vertical-align: super;
+  color: var(--ink-muted);
+}
+
+/* Tautan ke berkas yang tidak ada: tetap terbaca, tidak menipu. */
+.md .md-link-dead {
+  color: var(--ink-muted);
+  text-decoration-style: dotted;
+}
+
+.md .md-link-dead:hover {
+  color: var(--accent-strong);
+  text-decoration-thickness: 1px;
+}
+
+/* --- Daftar --- */
+
+.md ul,
+.md ol {
+  padding-left: 1.4rem;
+}
+
+.md li + li {
+  margin-top: var(--s-2);
+}
+
+.md li > ul,
+.md li > ol {
+  margin-top: var(--s-2);
+}
+
+.md ul {
+  list-style: square;
+}
+
+.md ol {
+  list-style: decimal;
+}
+
+/* Daftar tugas (GFM): centang nyata, warna aksen merah. */
+.md li.task {
+  list-style: none;
+  margin-left: -1.35rem;
+  display: flex;
+  gap: var(--s-2);
+  align-items: flex-start;
+}
+
+.md li.task input[type="checkbox"] {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 0.38em;
+  accent-color: var(--accent);
+}
+
+/* --- Kutipan --- */
+
+.md blockquote {
+  padding: var(--s-2) 0 var(--s-2) var(--s-4);
+  border-left: 3px solid var(--ink);
+  color: var(--ink-2);
+  font-style: italic;
+}
+
+.md blockquote > :first-child {
+  margin-top: 0;
+}
+
+.md blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+/* --- Kode --- */
+
+.md code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--paper-3);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+
+.md pre {
+  background: var(--paper-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: var(--s-4);
+  max-width: 100%;
+  overflow-x: auto;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.md pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+/* --- Tabel: garis horizontal saja, teks panjang tidak meledak --- */
+
+.md table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94em;
+  overflow-x: auto;
+}
+
+.md th,
+.md td {
+  border-bottom: 1px solid var(--rule);
+  padding: var(--s-2) var(--s-3);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.md thead th {
+  border-bottom: 2px solid var(--ink);
+  font-family: var(--sans);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.md tbody tr:last-child td {
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.md tbody tr:hover td {
+  background: var(--paper-2);
+}
+
+/* --- Lain-lain --- */
+
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--ink);
+  margin: var(--s-6) 0;
+}
+
+.md img {
+  margin-top: var(--s-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper-2);
+}
+
+.md figcaption {
+  margin-top: var(--s-2);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+
+.md mark {
+  background: rgba(227, 6, 19, 0.15);
+  color: inherit;
+  padding: 0 0.15em;
+}
+
+.md kbd {
+  font-family: var(--mono);
+  font-size: 0.8em;
+  border: 1px solid var(--rule-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius);
+  padding: 0.1em 0.4em;
+  background: var(--paper-2);
+}
+
+.md dt {
+  font-weight: 700;
+  margin-top: var(--s-3);
+}
+
+.md dd {
+  margin-left: 0;
+  padding-left: var(--s-4);
+  border-left: 2px solid var(--rule-strong);
+}
+
+/* Judul tujuan lompatan anchor: ringkas, tanpa animasi. */
+.md h1:focus,
+.md h2:focus,
+.md h3:focus,
+.md h4:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+
+/* --- Diagram mermaid: fence ```mermaid jadi SVG, dengan jeda lihat sumber --- */
+
+.md .mermaid-block {
+  margin: var(--s-4) 0;
+  padding: var(--s-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper-3);
+}
+
+.md .mermaid-diagram {
+  overflow-x: auto;
+}
+
+.md .mermaid-diagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.md .mermaid-source {
+  display: none;
+}
+
+.md .mermaid-block[data-view='source'] .mermaid-diagram {
+  display: none;
+}
+
+.md .mermaid-block[data-view='source'] .mermaid-source {
+  display: block;
+}
+
+.md .mermaid-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
