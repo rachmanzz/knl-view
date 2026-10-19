@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Viewer lokal untuk basis pengetahuan .knowledges: CLI dan tampilan web.",
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "bin": {
     "knl-view": "bin/knl-view.js"
   },
