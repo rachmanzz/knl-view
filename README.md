@@ -40,11 +40,13 @@ Not published to npm. Install straight from GitHub:
 
 ```sh
 npx github:rachmanzz/knl-view                 # run once, no install
-npm install -g github:rachmanzz/knl-view      # install globally
+npm install -g github:rachmanzz/knl-view --install-links   # install globally
 ```
 
 The repository ships the built `dist/`, so these installs do not compile
-anything. Re-run the install command after new commits to pick up changes.
+anything. `--install-links` matters: without it npm 11 links the package to a
+temporary clone that it deletes afterwards, which leaves a broken install.
+Re-run the install command after new commits to pick up changes.
 
 The global command lands in `$(npm prefix -g)/bin`. If that directory is not
 on your PATH, link it somewhere that is:
