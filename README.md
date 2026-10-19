@@ -31,12 +31,29 @@ knl-view --port 8086 --path=.knowledges
 ## Requirements
 
 - Node.js 20.19 or newer.
-- A built frontend (`npm run build` produces `dist/`). The CLI refuses to start
-  without it and tells you so.
+- A built frontend. `dist/` is committed to this repository, so an install from
+  GitHub already has it. The CLI refuses to start without it and tells you so.
 
 ## Install
 
-Not published to npm. Install from source:
+Not published to npm. Install straight from GitHub:
+
+```sh
+npx github:rachmanzz/knl-view                 # run once, no install
+npm install -g github:rachmanzz/knl-view      # install globally
+```
+
+The repository ships the built `dist/`, so these installs do not compile
+anything. Re-run the install command after new commits to pick up changes.
+
+The global command lands in `$(npm prefix -g)/bin`. If that directory is not
+on your PATH, link it somewhere that is:
+
+```sh
+ln -s "$(npm prefix -g)/bin/knl-view" ~/.local/bin/knl-view
+```
+
+Or install from source:
 
 ```sh
 git clone https://github.com/rachmanzz/knl-view.git
@@ -144,6 +161,12 @@ Starts the API on port 8085 (override with `PORT`) and the Vite dev server on
 ```sh
 npm run dev -- ../some-project/.knowledges
 ```
+
+`dist/` is committed to this repository so that installs straight from GitHub
+keep working, because npm runs no build step for a git install without a
+`prepare` script. After changing the frontend, run `npm run build` and commit
+the result together with the source, or those installs stay on the previous
+build.
 
 ## License
 
