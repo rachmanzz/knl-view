@@ -15,6 +15,7 @@
   "scripts": {
     "dev": "node scripts/dev.js",
     "build": "vite build",
+    "prepare": "vite build",
     "start": "node bin/knl-view.js"
   },
   "engines": {
