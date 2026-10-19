@@ -1,0 +1,343 @@
+/* ============================================================
+   layout.css — kerangka halaman
+   Kolom kiri: indeks permanen (sticky, tinggi penuh layar).
+   Kolom kanan: topbar sticky + bacaan tunggal. Garis hitam tebal
+   menandai blok judul, garis rambut memisahkan baris. Semua
+   perubahan tata letak langsung, tanpa animasi (MOTION 1).
+   ============================================================ */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  min-height: 100dvh;
+}
+
+/* --- Sidebar (desktop) --- */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper-2);
+  border-right: 1px solid var(--rule-strong);
+  overflow: hidden;
+  z-index: 50;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-4) var(--s-3);
+  border-bottom: 1px solid var(--ink);
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.brand-mark {
+  font-family: var(--sans);
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.brand-source {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Tombol tutup hanya ada di mode laci (layar kecil).
+   Selektor rangkap agar menang atas `.btn { display }` di ui.css. */
+.btn.sidebar-close {
+  display: none;
+}
+
+.sidebar-search {
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.sidebar-search label {
+  display: block;
+  margin-bottom: var(--s-1);
+  font-family: var(--sans);
+  font-size: var(--label-size);
+  font-weight: 600;
+  letter-spacing: var(--label-track);
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.sidebar-search input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 var(--s-3);
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.sidebar-search input::placeholder {
+  color: var(--ink-muted);
+}
+
+.sidebar-search input:hover {
+  border-color: var(--ink);
+}
+
+/* Pohon navigasi: satu-satunya area yang menggulir di sidebar. */
+.nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--s-3) var(--s-2) var(--s-4);
+}
+
+.sidebar-foot {
+  border-top: 1px solid var(--ink);
+  padding: var(--s-3) var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.sidebar-root {
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+
+/* --- Kolom kanan --- */
+
+.main-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 100dvh;
+}
+
+/* --- Topbar --- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: var(--topbar-h);
+  padding: var(--s-2) var(--s-5);
+  background: var(--paper);
+  border-bottom: 1px solid var(--ink);
+}
+
+/* Tombol indeks hanya tampil sebagai laci di bawah 60rem (ui.css). */
+.btn.topbar-menu {
+  display: none;
+}
+
+.topbar-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Banner gagal muat ulang --- */
+
+.banner {
+  margin: var(--s-4) var(--s-5) 0;
+  padding: var(--s-3) var(--s-4);
+  background: var(--paper-3);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+/* --- Isi --- */
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: var(--s-5) var(--s-5) var(--s-7);
+}
+
+.content:focus {
+  outline: none;
+}
+
+/* --- Footer --- */
+
+.site-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-4);
+  border-top: 1px solid var(--rule-strong);
+  padding: var(--s-4) var(--s-5);
+  font-size: 11px;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+
+/* ============================================================
+   Beranda
+   ============================================================ */
+
+.home {
+  max-width: 62rem;
+}
+
+/* Blok judul Swiss: garis hitam tebal di atas, rambut di bawah. */
+.masthead {
+  border-top: 5px solid var(--ink);
+  padding-top: var(--s-4);
+  padding-bottom: var(--s-5);
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: var(--s-6);
+}
+
+.eyebrow {
+  font-family: var(--sans);
+  font-size: var(--label-size);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.masthead h1 {
+  margin-top: var(--s-2);
+  font-family: var(--sans);
+  font-size: clamp(32px, 5.5vw, 52px);
+  line-height: 1.05;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.masthead-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  margin-top: var(--s-4);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: var(--s-6);
+  align-items: start;
+}
+
+/* ============================================================
+   Folder
+   ============================================================ */
+
+.folder {
+  max-width: 56rem;
+}
+
+.folder-head {
+  margin-bottom: var(--s-5);
+}
+
+.folder-title {
+  margin-top: var(--s-2);
+  font-size: clamp(26px, 4vw, 36px);
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.folder-title .mono {
+  font-family: var(--mono);
+  font-size: 0.82em;
+}
+
+.folder-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  margin-top: var(--s-3);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.inline-note {
+  margin-top: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  background: var(--paper-2);
+  border-left: 3px solid var(--ink);
+  border-radius: var(--radius);
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
+/* ============================================================
+   Dokumen (bacaan)
+   ============================================================ */
+
+.reading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s-6);
+  max-width: 74rem;
+}
+
+.doc {
+  min-width: 0;
+  max-width: var(--measure);
+}
+
+.doc-head {
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--ink);
+  margin-bottom: var(--s-5);
+}
+
+.doc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-4);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.doc-title {
+  margin-top: var(--s-3);
+  font-family: var(--sans);
+  font-size: clamp(28px, 4.5vw, 42px);
+  line-height: 1.08;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}

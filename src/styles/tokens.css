@@ -1,0 +1,234 @@
+/* ============================================================
+   knl-view — Arsitektur Token
+   Swiss modern (International Typographic Style): putih bersih,
+   grid ketat, garis rambut hitam, sans Helvetica, satu aksen
+   merah untuk penanda keadaan ("anda di sini", fokus, galat).
+   Alasan pilihan huruf: Swiss = Helvetica; Arial/Liberation
+   adalah pasokan sistem di Linux, jadi tanpa unduhan.
+   Kunci token ini lebih dulu sebelum komponen apa pun dibuat.
+   ============================================================ */
+
+:root {
+  /* --- Warna: 2 inti (putih, hitam) + netral abu + 1 aksen --- */
+  --paper: #ffffff; /* kertas utama: latar konten */
+  --paper-2: #f3f3f1; /* panel sekunder: sidebar, kartu */
+  --paper-3: #e9e9e6; /* panel tersier: band kode */
+  --paper-hover: #ededea; /* hover baris daftar */
+  --ink: #111111; /* tinta utama: teks, judul, garis berat */
+  --ink-2: #454545; /* tinta lemah: teks sekunder */
+  --ink-muted: #636363; /* metadata (lolos 4.5:1 di semua kertas) */
+  --rule: #dcdcd8; /* garis rambut: pemisah baris */
+  --rule-strong: #858580; /* garis tegas: batas kontrol (lolos 3:1) */
+  --accent: #e30613; /* merah Swiss: penanda aktif, fokus, galat */
+  --accent-strong: #a5090f; /* merah pekat: teks hover/aktif (7:1) */
+  --focus: #e30613; /* cincin fokus, tebal 2px */
+
+  /* --- Tipografi --- */
+  --sans: "Helvetica Neue", Helvetica, Arial, "Segoe UI", Roboto,
+    "Liberation Sans", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo,
+    Consolas, "Liberation Mono", monospace;
+
+  /* Skala ruang: hanya nilai ini yang dipakai jarak di seluruh aplikasi. */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+
+  --radius: 0; /* sudut siku: Swiss tanpa pembulatan */
+
+  --sidebar-w: 17.5rem;
+  --topbar-h: 3.25rem;
+  --measure: 44rem; /* lebar baca maksimum */
+
+  /* Label kecil huruf besar: kapital + tracking moderat (0.1em),
+     bagian kosakata Swiss, bukan hiasan. */
+  --label-size: 10.5px;
+  --label-track: 0.1em;
+}
+
+/* --- Reset --- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow-wrap: break-word;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+figure,
+blockquote,
+dl,
+dd,
+ul,
+ol {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+}
+
+img,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--ink);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+}
+
+a:hover {
+  color: var(--accent-strong);
+}
+
+/* --- Fokus: merah Swiss, terlihat di atas putih, untuk keyboard --- */
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 0;
+}
+
+/* --- Utilitas --- */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip {
+  position: absolute;
+  left: var(--s-4);
+  top: -3rem;
+  z-index: 60;
+  padding: var(--s-2) var(--s-3);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: var(--radius);
+}
+
+.skip:focus {
+  top: var(--s-2);
+  color: var(--paper);
+}
+
+/* --- Gerak: hormati preferensi sistem --- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --- Cetak: dokumen harus terbaca di kertas --- */
+
+@media print {
+  :root {
+    --paper: #fff;
+    --paper-2: #fff;
+    --paper-3: #f2f2f2;
+  }
+
+  .sidebar,
+  .topbar,
+  .toc-rail,
+  .toc-inline,
+  .doc-pager,
+  .crumbs,
+  .banner,
+  .site-foot,
+  .home-recent,
+  .scrim,
+  .state-dots {
+    display: none !important;
+  }
+
+  .main-col,
+  .content,
+  .reading,
+  .doc {
+    max-width: none;
+    width: auto;
+    padding: 0;
+    margin: 0;
+    display: block;
+  }
+
+  .md a::after {
+    content: " (" attr(href) ")";
+    font-size: 0.85em;
+    color: var(--ink-muted);
+    font-family: var(--mono);
+    word-break: break-all;
+  }
+
+  .md h1,
+  .md h2,
+  .md h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  .md pre,
+  .md table,
+  .md blockquote {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
