@@ -144,7 +144,7 @@ This system uses auth tokens. See also [User Profile](features/profile.md).
 - Tags: \`graph\`, \`ai\`
 - Supersedes: \`DEC-20261028-100000\`
 - Related: none
-- References: \`docs/architecture.md\`
+- References: \`ref/DEC-20261030-github.md\`
 
 ### Decision
 
@@ -168,7 +168,37 @@ It supports multi-hop traversal and causal chains.
 
     const refEdge = edges.find(e => e.type === 'affects_knowledge')
     assert.ok(refEdge)
-    assert.equal(refEdge.to, 'docs/architecture.md')
+    assert.equal(refEdge.to, 'decisions/ref/DEC-20261030-github.md')
+  })
+
+  test('decision references resolve from the decisions folder and connect to ref docs', async () => {
+    const knlDir = path.join(rootDir, '.knowledges')
+    fs.mkdirSync(path.join(knlDir, 'decisions', 'ref'), { recursive: true })
+    fs.writeFileSync(
+      path.join(knlDir, 'decisions', 'ref', 'DEC-TEST-ref.md'),
+      '# Some Reference\n\nSupporting material.\n',
+      'utf8'
+    )
+    fs.writeFileSync(
+      path.join(knlDir, 'decisions', 'dec-with-ref.md'),
+      `<!-- decision:start -->\n## Uses a ref\n\n- ID: \`DEC-REF-1\`\n- References: \`ref/DEC-TEST-ref.md\`\n\n### Decision\n\nPoints at the ref folder.\n<!-- decision:end -->\n`,
+      'utf8'
+    )
+    try {
+      const graph = await buildGraphFromRoot(knlDir)
+      const refDoc = graph.getNode('decisions/ref/DEC-TEST-ref.md')
+      assert.ok(refDoc, 'the ref document itself must be a graph node')
+      assert.equal(refDoc.type, 'knowledge')
+
+      const edge = graph.edges.find(
+        (e) => e.from === 'DEC-REF-1' && e.type === 'affects_knowledge'
+      )
+      assert.ok(edge, 'the decision must carry an affects_knowledge edge')
+      assert.equal(edge.to, 'decisions/ref/DEC-TEST-ref.md')
+    } finally {
+      fs.rmSync(path.join(knlDir, 'decisions', 'ref'), { recursive: true, force: true })
+      fs.rmSync(path.join(knlDir, 'decisions', 'dec-with-ref.md'), { force: true })
+    }
   })
 
   test('buildGraphFromRoot scans existing .knowledges directory', async () => {

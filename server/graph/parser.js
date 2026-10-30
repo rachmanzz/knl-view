@@ -237,11 +237,23 @@ function parseSingleDecisionBlock(relPath, rawBlock) {  const lines = rawBlock.s
     }))
   }
 
+  // References are resolved relative to the decision file's own folder,
+  // the same rule markdown links follow: a decision in decisions/2026-10.md
+  // writing `ref/DEC-x.md` points at decisions/ref/DEC-x.md. Absolute and
+  // URL-shaped values are kept as-is.
+  const docDir = path.posix.dirname(relPath.replace(/\\/g, '/'))
   for (const ref of references) {
-    const isDocRef = ref.endsWith('.md') || ref.includes('/')
+    const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(ref)
+    const isDocRef = !isUrl && (ref.endsWith('.md') || ref.includes('/'))
+    let target = ref
+    if (isDocRef && !ref.startsWith('/')) {
+      target = (docDir && docDir !== '.')
+        ? path.posix.normalize(`${docDir}/${ref}`)
+        : ref.replace(/^\//, '')
+    }
     edges.push(new GraphEdge({
       from: id,
-      to: ref,
+      to: target,
       type: isDocRef ? 'affects_knowledge' : 'references'
     }))
   }
@@ -269,9 +281,16 @@ export async function buildGraphFromRoot(rootAbs) {
 
     // Check whether this is a decision file (under the decisions/ folder)
     if (normRel.startsWith('decisions/')) {
-      const { nodes, edges } = parseDecisionBlocks(normRel, content)
+      const { nodes, edges: decisionEdges } = parseDecisionBlocks(normRel, content)
       for (const n of nodes) graph.addNode(n)
-      for (const e of edges) graph.addEdge(e)
+      for (const e of decisionEdges) graph.addEdge(e)
+      // A decision file with no blocks is a plain document (for example
+      // reference material under decisions/ref/): keep it in the graph as
+      // a knowledge node so decisions can point at it by path.
+      if (nodes.length === 0) {
+        const { node } = parseKnowledgeContent(normRel, content)
+        graph.addNode(node)
+      }
     } else {
       const { node, edges } = parseKnowledgeContent(normRel, content)
       graph.addNode(node)
