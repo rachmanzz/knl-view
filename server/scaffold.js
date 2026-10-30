@@ -184,6 +184,40 @@ The sidebar always opens with two fixed entries above the tree: \`index\`
 no file on disk that lists the whole base). The root README is therefore
 not repeated inside the tree.
 
+## Config (two layers)
+
+knl-view reads two optional config files. A missing file is never an error;
+a broken file is ignored with one warning.
+
+**Global: \`~/.knlview/knl-config.json\`** — shared by every project on this
+machine. Holds the \`anchordb\` block (connection). Without it, AnchorDB
+stays completely off:
+
+\`\`\`json
+{
+  "anchordb": {
+    "url": "wire://127.0.0.1:7448",
+    "token": "your-token",
+    "sync": true
+  }
+}
+\`\`\`
+
+**Per project: \`knl-config.json\` at the project root** — machine-local,
+gitignored. Holds only \`path\`, \`port\`, \`host\`, and \`model\`:
+
+\`\`\`json
+{
+  "path": ".knowledges",
+  "port": 8085,
+  "model": "knowledges"
+}
+\`\`\`
+
+The model is auto-namespaced as \`{projectname}-{model}\` so several projects
+can share one AnchorDB server without colliding. CLI flags always win over
+config values.
+
 ## Rules
 
 - Never move or delete files to satisfy the map. Either add the file or

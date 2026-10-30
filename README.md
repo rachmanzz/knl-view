@@ -84,6 +84,7 @@ knl-view --seed-skill=knl-view --dir=global --yes
 | `--port`, `-p` | `8085` | HTTP port |
 | `--path` | `.knowledges` | Folder to serve, relative to the working directory |
 | `--host` | `127.0.0.1` | Bind address |
+| `--anchordb` | none | AnchorWire URL (`wire://host:port?token=...`) for this session; overrides the global config block |
 | `--target` | none | Target node ID for CLI subgraph trace (`knl-view graph trace`) |
 | `--hops` | `2` | Traversal depth radius for subgraph extraction |
 | `--init` | off | Scaffold a new base interactively; does not start the server |
@@ -98,6 +99,40 @@ knl-view --seed-skill=knl-view --dir=global --yes
 The server binds to `127.0.0.1` by default, so it is reachable only from your
 machine unless you pass `--host` yourself. There is no authentication; treat
 `--host 0.0.0.0` as a decision you are making on purpose.
+
+## Configuration
+
+Two optional config files. A missing file is never an error; a broken file is
+ignored with one warning on stderr. CLI flags always win over config values.
+
+**Global — `~/.knlview/knl-config.json`**: shared by every project on the
+machine. Holds the `anchordb` block. Without it, AnchorDB stays completely
+off and the viewer runs fully local:
+
+```json
+{
+  "anchordb": {
+    "url": "wire://127.0.0.1:7448",
+    "token": "your-token",
+    "sync": true
+  }
+}
+```
+
+**Per project — `knl-config.json` at the project root** (gitignored): only
+`path`, `port`, `host`, and `model` — never the anchordb connection:
+
+```json
+{
+  "port": 8085,
+  "model": "knowledges"
+}
+```
+
+The model is auto-namespaced as `{projectname}-{model}` (project name from
+`package.json` `name`, else the folder basename), so several projects can
+share one AnchorDB server without colliding: project `knl-view` serving
+`model: knowledges` uses model `knl-view-knowledges` on the server.
 
 ## How a base is read
 
@@ -176,6 +211,7 @@ Outputs a compact JSON subgraph to `stdout` containing the focal node and all di
 When `knl-view` is running as a local server:
 - `GET /api/graph`: Returns the entire knowledge and decision graph structure.
 - `GET /api/graph/trace?target=<id>&hops=2`: Returns an isolated $N$-hop neighborhood subgraph for AI agents or interactive visualization.
+- `GET /api/anchordb/trace?target=<id>&hops=2`: Returns a causal chain traced on the AnchorDB server (requires the global `anchordb` config block). Returns `503` when AnchorDB is off or unreachable.
 
 ## Development
 

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { GraphNode, GraphEdge, DirectedGraph } from '../server/graph/model.js'
 import { parseKnowledgeContent, parseDecisionBlocks, buildGraphFromRoot } from '../server/graph/parser.js'
 import { createKnowledgeServer } from '../server/index.js'
+import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain } from '../server/graph/anchordb_client.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(here, '..')
@@ -180,5 +181,23 @@ describe('CLI Graph Trace (Zero-File Intermediary)', () => {
     // Pastikan tidak ada berkas perantara graph.json yang tercipta di disk
     const outGraph = path.join(knlDir, 'graph.json')
     assert.ok(!fs.existsSync(outGraph))
+  })
+})
+
+describe('AnchorWire Client Integration', () => {
+  test('anchordb_client functions are properly defined and handle connection errors gracefully', async () => {
+    assert.equal(typeof createAnchorWireClient, 'function')
+    assert.equal(typeof syncGraphToAnchorDB, 'function')
+    assert.equal(typeof traceCausalChain, 'function')
+
+    await assert.rejects(
+      async () => {
+        await createAnchorWireClient({ host: '127.0.0.1', port: 59999, connectTimeoutMs: 300 })
+      },
+      (err) => {
+        assert.ok(err.message.includes('Gagal terhubung ke AnchorDB'))
+        return true
+      }
+    )
   })
 })

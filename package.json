@@ -21,6 +21,7 @@
     "node": ">=20.19"
   },
   "dependencies": {
+    "@rahmantech/anchorwire": "^0.1.0",
     "marked": "^18.1.1",
     "mermaid": "^12.2.0",
     "react": "^19.3.1",

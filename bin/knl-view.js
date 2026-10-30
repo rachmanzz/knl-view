@@ -4,7 +4,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import readline from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
-import { createKnowledgeServer } from '../server/index.js'
+import { createKnowledgeServer, attachAnchorDB } from '../server/index.js'
 import { scaffoldBase, seedSkill, ensureGitignore } from '../server/scaffold.js'
 import { buildGraphFromRoot } from '../server/graph/parser.js'
 import { readProjectConfig, readGlobalConfig, projectSlug, resolveSettings } from '../server/config.js'
@@ -23,10 +23,16 @@ Pemakaian:
 Bawaan --port/--path/--host bisa disimpan di knl-config.json di folder
 project (machine-local, gitignored). Flag CLI selalu menimpa config.
 
+AnchorDB dibaca dari config global ~/.knlview/knl-config.json (URL, token,
+sync) sehingga semua project berbagi server yang sama. Model per project
+diset di knl-config.json dan otomatis di-namespace: {project}-{model}.
+
 Opsi:
   --port, -p <angka>      Port HTTP (bawaan: 8085, atau knl-config.json)
   --path <folder>         Folder basis pengetahuan (bawaan: .knowledges, atau knl-config.json)
   --host <alamat>         Alamat bind (bawaan: 127.0.0.1, atau knl-config.json)
+  --anchordb <url>        URL AnchorWire untuk sesi ini, menimpa blok
+                          "anchordb" di knl-config.json
   --target <id>           ID simpul target untuk kueri sub-graf
   --hops <angka>          Radius hop penelusuran graf (bawaan: 2)
   --init                  Bangun basis baru lewat wizard (tidak memulai server)
@@ -56,6 +62,7 @@ try {
       port: { type: 'string', short: 'p' },
       path: { type: 'string' },
       host: { type: 'string' },
+      anchordb: { type: 'string' },
       target: { type: 'string' },
       hops: { type: 'string', default: '2' },
       init: { type: 'boolean', default: false },
@@ -109,6 +116,9 @@ const settings = resolveSettings({
   global: globalConfig,
   projectName: projectSlug(process.cwd())
 })
+if (values.anchordb !== undefined && !settings.anchordb) {
+  fail('--anchordb harus URL wire:// atau tcp://, contoh: --anchordb=wire://127.0.0.1:7448?token=xxx')
+}
 
 const isGraphTrace = (positionals?.[0] === 'graph' && positionals?.[1] === 'trace') || values.target !== undefined
 if (isGraphTrace) {
@@ -153,7 +163,7 @@ if (!fs.existsSync(path.join(dist, 'index.html'))) {
   fail(`Antarmuka belum dibangun (${dist}).\nJalankan dulu: npm run build`)
 }
 
-const server = createKnowledgeServer({ root, dist, host: settings.host, port })
+const server = createKnowledgeServer({ root, dist, host: settings.host, port, anchordb: settings.anchordb })
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
@@ -170,6 +180,18 @@ server.listen(port, settings.host, () => {
       `  sumber   ${root}\n` +
       `Tekan Ctrl+C untuk berhenti.\n`
   )
+
+  if (settings.anchordb) {
+    attachAnchorDB(server).then((result) => {
+      if (result.ok) {
+        let line = `  anchordb terhubung (${result.model}`
+        if (result.synced) line += result.failed ? `, sync ${result.linked} edge, ${result.failed} gagal` : ', graf tersinkron'
+        process.stdout.write(`${line})\n`)
+      } else {
+        process.stdout.write(`  anchordb gagal: ${result.reason} (viewer jalan lokal saja)\n`)
+      }
+    })
+  }
 })
 
 // Wizard --init / --seed-skill. Mode tanya hanya bila stdin TTY dan tanpa

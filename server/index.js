@@ -4,6 +4,8 @@ import { createReadStream } from 'node:fs'
 import path from 'node:path'
 import { readMap, normalizeMap, decorateNode } from './map.js'
 import { buildGraphFromRoot } from './graph/parser.js'
+import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain } from './graph/anchordb_client.js'
+import { anchordbClientOptions, DEFAULT_RELATIONS } from './config.js'
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -33,12 +35,21 @@ const MD_EXTS = new Set(['md', 'markdown', 'prd'])
 const MAX_DOC_BYTES = 8 * 1024 * 1024
 const TITLE_READ_BYTES = 8192
 
-export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085 }) {
+export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085, anchordb = null }) {
   const rootAbs = path.resolve(root)
   const distAbs = dist ? path.resolve(dist) : null
+  // Status koneksi AnchorDB hidup di sini, bukan snapshot: attachAnchorDB
+  // mengisinya setelah server jalan, dan route membaca status terkini.
+  const anchordbState = {
+    config: anchordb,
+    client: null,
+    status: anchordb ? 'connecting' : 'off',
+    error: null,
+    syncedAt: null
+  }
 
   const server = http.createServer((req, res) => {
-    route(req, res, rootAbs, distAbs, { host, port }).catch((err) => {
+    route(req, res, rootAbs, distAbs, { host, port, anchordb: anchordbState }).catch((err) => {
       if (!res.headersSent) sendJson(res, 500, { error: `Gagal memproses permintaan: ${err.message}` })
       else res.end()
     })
@@ -47,10 +58,59 @@ export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', p
   server.knlRoot = rootAbs
   server.knlHost = host
   server.knlPort = port
+  server.knlAnchorDB = anchordbState
   return server
 }
 
-async function route(req, res, rootAbs, distAbs, listen) {  const url = new URL(req.url, 'http://localhost')
+// Hubungkan knl-view ke AnchorDB setelah server mendengarkan. Kegagalan
+// connect atau sync tidak pernah menjatuhkan server: viewer tetap jalan
+// lokal penuh, status tinggal dibaca lewat state.
+export async function attachAnchorDB(server) {
+  const state = server.knlAnchorDB
+  if (!state?.config) {
+    state.status = 'off'
+    return { ok: false, reason: 'off' }
+  }
+  const options = anchordbClientOptions(state.config)
+  if (!options) {
+    state.status = 'error'
+    state.error = 'URL anchordb tidak bisa dibaca'
+    return { ok: false, reason: state.error }
+  }
+  try {
+    state.client = await createAnchorWireClient(options)
+  } catch (err) {
+    state.client = null
+    state.status = 'error'
+    state.error = err.message
+    return { ok: false, reason: err.message }
+  }
+  state.status = 'connected'
+  state.error = null
+  let synced = false
+  if (state.config.sync) {
+    try {
+      const graph = await buildGraphFromRoot(server.knlRoot)
+      const result = await syncGraphToAnchorDB(state.client, graph)
+      state.syncedAt = Date.now()
+      state.lastSync = result
+      synced = true
+    } catch (err) {
+      // Koneksi sudah cukup untuk trace; kegagalan sync hanya dicatat.
+      state.error = err.message
+    }
+  }
+  return {
+    ok: true,
+    model: options.model,
+    synced,
+    linked: state.lastSync?.linked ?? 0,
+    failed: state.lastSync?.failed ?? 0
+  }
+}
+
+async function route(req, res, rootAbs, distAbs, listen) {
+  const url = new URL(req.url, 'http://localhost')
   const pathname = url.pathname
 
   if (pathname === '/api/meta') return sendJson(res, 200, await buildMeta(rootAbs, listen))
@@ -71,6 +131,9 @@ async function route(req, res, rootAbs, distAbs, listen) {  const url = new URL(
     const subGraph = graph.extractSubGraph(target, Number.isInteger(hops) && hops > 0 ? hops : 2)
     return sendJson(res, 200, subGraph)
   }
+  if (pathname === '/api/anchordb/trace') {
+    return handleAnchorTrace(res, listen.anchordb, url)
+  }
   if (pathname.startsWith('/api/')) {
     return sendJson(res, 404, { error: `Endpoint tidak dikenal: ${pathname}` })
   }
@@ -81,6 +144,41 @@ async function route(req, res, rootAbs, distAbs, listen) {  const url = new URL(
   }
 
   return sendStatic(req, res, distAbs, pathname)
+}
+
+// Penelusuran rantai kausal multi-hop di sisi AnchorDB. Hanya aktif bila
+// knl-config.json project membawa blok anchordb dan koneksinya hidup.
+async function handleAnchorTrace(res, state, url) {
+  if (!state?.config) {
+    return sendJson(res, 503, { error: 'AnchorDB tidak aktif. Tambahkan blok "anchordb" di knl-config.json.' })
+  }
+  if (state.status !== 'connected' || !state.client) {
+    return sendJson(res, 503, {
+      error: `AnchorDB belum terhubung (status: ${state.status}).`,
+      detail: state.error || null
+    })
+  }
+  const target = url.searchParams.get('target') || url.searchParams.get('id')
+  if (!target) {
+    return sendJson(res, 400, { error: 'Parameter "target" atau "id" wajib disertakan.' })
+  }
+  const relations = url.searchParams.get('relations')
+    ? url.searchParams.get('relations').split(',').map((s) => s.trim()).filter(Boolean)
+    : (state.config.relations?.length ? state.config.relations : DEFAULT_RELATIONS)
+  const limit = parseInt(url.searchParams.get('limit') || '20', 10)
+  const hops = parseInt(url.searchParams.get('hops') || '2', 10)
+  try {
+    const chain = await traceCausalChain(
+      state.client,
+      target,
+      relations,
+      Number.isInteger(limit) && limit > 0 ? limit : 20,
+      Number.isInteger(hops) && hops > 0 ? hops : 2
+    )
+    return sendJson(res, 200, { target, relations, limit, hops, chain })
+  } catch (err) {
+    return sendJson(res, 502, { error: `AnchorDB gagal menelusuri: ${err.message}` })
+  }
 }
 
 function safeJoin(base, relPath) {
