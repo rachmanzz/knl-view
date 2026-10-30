@@ -332,6 +332,7 @@ Each file also defines **symbol nodes**, extracted from the same parse:
 ```sh
 knl-view model new sources
 knl-view sources sync
+knl-view sources collect
 knl-view sources trace --target=server/index.js --direction=out --hops=2
 knl-view sources trace --target=server/index.js#handleTrace --direction=in
 ```
@@ -339,12 +340,16 @@ knl-view sources trace --target=server/index.js#handleTrace --direction=in
 `sync` is idempotent: run it again after refactoring and only the
 difference is applied. A target containing `#` traces symbol lineage over
 `calls`/`called_by`; a plain path traces file lineage over
-`imports`/`imported_by`. Records the disk no longer has are tombstoned
-(attribute `tombstone = 2`) after their edges are unlinked (the wire
-protocol has no record delete), and a reappearing file lifts the tombstone
-and relinks its edges. Sync reports `ORPHAN EDGES` when an edge endpoint
-failed to save, so a broken sync is never silent. The read-only HTTP
-endpoint answers the same queries:
+`imports`/`imported_by`. Records the disk no longer has are archived with
+the native lifecycle opcode 2 (TOMBSTONE: the server hides them from list
+and lookups) after their edges are unlinked, and the `tombstone = 2`
+attribute stays as a marker for servers that predate opcode support.
+`sync` then asks the REST collector to purge those records physically
+(scoped to the model); run `knl-view sources collect` by hand if the REST
+endpoint was unreachable at that moment. A reappearing file revives the
+record with a normal save and relinks its edges. Sync reports
+`ORPHAN EDGES` when an edge endpoint failed to save, so a broken sync is
+never silent. The read-only HTTP endpoint answers the same queries:
 `GET /api/sources/trace?target=<id>&direction=in|out|both&hops=N`.
 
 ### CLI Query
