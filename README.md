@@ -36,36 +36,42 @@ knl-view --port 8086 --path=.knowledges
 
 ## Install
 
-Not published to npm. Install straight from GitHub:
-
 ```sh
-npx github:rachmanzz/knl-view                 # run once, no install
-npm install -g github:rachmanzz/knl-view --install-links   # install globally
+npm install -g @rahmantech/knl-view
 ```
 
-The repository ships the built `dist/`, so these installs do not compile
-anything. `--install-links` matters: without it npm 11 links the package to a
-temporary clone that it deletes afterwards, which leaves a broken install.
-Re-run the install command after new commits to pick up changes.
-
-The global command lands in `$(npm prefix -g)/bin`. If that directory is not
-on your PATH, link it somewhere that is:
+That puts the `knl-view` command into Node's global bin,
+`$(npm prefix -g)/bin`. If that directory is not on your PATH, link the
+command somewhere that is:
 
 ```sh
 ln -s "$(npm prefix -g)/bin/knl-view" ~/.local/bin/knl-view
 ```
 
-Or install from source:
+The published tarball ships the built `dist/`, so the install compiles
+nothing.
+
+Run it once without installing:
+
+```sh
+npx @rahmantech/knl-view
+```
+
+Or install from source, for a local checkout or an unreleased commit:
 
 ```sh
 git clone https://github.com/rachmanzz/knl-view.git
 cd knl-view
 npm install
 npm run build
+npm link
 ```
 
-Run it directly with `node bin/knl-view.js`, or make the `knl-view` command
-available on your PATH with `npm link`.
+`npm link` puts `knl-view` on your PATH from the checkout. To install a
+GitHub commit without cloning, run
+`npm install -g github:rachmanzz/knl-view --install-links`; without
+`--install-links`, npm 11 links against a temporary clone it deletes
+afterwards, which leaves a broken install.
 
 ## Usage
 

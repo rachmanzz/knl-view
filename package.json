@@ -1,7 +1,7 @@
 {
-  "name": "knl-view",
+  "name": "@rahmantech/knl-view",
   "version": "0.1.0",
-  "description": "Viewer lokal untuk basis pengetahuan .knowledges: CLI dan tampilan web.",
+  "description": "Local viewer for .knowledges knowledge bases: a CLI and a web app, with an optional AnchorDB graph layer.",
   "type": "module",
   "license": "Apache-2.0",
   "bin": {
@@ -12,6 +12,17 @@
     "server",
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rachmanzz/knl-view.git"
+  },
+  "homepage": "https://github.com/rachmanzz/knl-view#readme",
+  "bugs": {
+    "url": "https://github.com/rachmanzz/knl-view/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "node scripts/dev.js",
     "build": "vite build",
