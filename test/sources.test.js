@@ -449,9 +449,7 @@ describe('syncSourcesToAnchorDB', () => {
     assert.equal(second.tombstoned, 1)
     assert.ok(client.ops.unlinked.includes('a.js\u0000imports\u0000b.js'))
     assert.ok(client.ops.unlinked.includes('b.js\u0000imported_by\u0000a.js'))
-    // The record itself is not deletable in the protocol; it is archived
-    // with the native opcode 2 (hidden from list and lookups) and the
-    // tombstone attribute stays as the version-tolerant marker.
+    // Archived, not deleted: hidden from list and lookups.
     assert.equal(client.records.get('b.js').tombstone, 2)
     assert.equal(client.operations.get('b.js'), 2)
     const listed = await client.list({ limit: 100, offset: 0 })

@@ -855,10 +855,8 @@ async function runSourcesCommand(sub, values, { settings }) {
     '  knl-view sources trace --target=<repo-relative path> [--hops=2] [--direction=in|out|both]')
 }
 
-// Tombstoned records are hidden by the server but stay in storage until the
-// collector purges them, and collector jobs only start over HTTP. Best
-// effort: a missing or firewalled REST endpoint must not fail a sync, it
-// only postpones the physical purge.
+// Wire cannot start collector jobs, so archived records are purged over
+// REST. Best effort: a missing endpoint must not fail a sync.
 async function runSourcesCollector(base, model, { quiet }) {
   try {
     const purged = await purgeArchivedRecords(`wire://${base.host}:${base.port}`, base.token, model)

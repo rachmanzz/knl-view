@@ -21,13 +21,8 @@ import { SYNTAX_LANGUAGES, extractCode } from './syntax.js'
 // the project's label dir (.knowledges/.knl-data by default, overridable
 // via the project config's labelDir), regenerated on every sync.
 //
-// Removed files: the protocol has no delete, so after their edges are
-// unlinked the record is archived with the native lifecycle opcode 2
-// (TOMBSTONE: the server hides it from list and lookups) and the tombstone
-// attribute is kept as a version-tolerant marker for readers that predate
-// opcode support. A collector run purges archived records physically; if
-// the file reappears, a normal save revives the record and the edges are
-// relinked.
+// Removed files: the record is archived with opcode 2 (TOMBSTONE, hidden
+// from list and lookups) and purged by a collector run; a save revives it.
 
 export const SOURCE_RELATIONS = ['imports', 'imported_by']
 export const SOURCE_TOMBSTONE = 2
@@ -493,10 +488,8 @@ export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir } = {}) 
     }
   }
 
-  // Server records whose file is gone: their edges are already unlinked
-  // above; archive them with the native tombstone opcode so the server
-  // hides them and a collector run can purge them. The attribute stays as
-  // the marker for servers that predate opcode support.
+  // Files gone from disk: edges are already unlinked; archive the record
+  // (opcode 2) and keep the tombstone attr for servers without opcodes.
   const pending = []
   for (const name of serverAttrs.keys()) {
     if (diskIds.has(name)) continue
