@@ -46,8 +46,10 @@ Pemakaian:
 Bawaan --port/--path/--host bisa disimpan di knl-config.json di folder
 project (machine-local, gitignored). Flag CLI selalu menimpa config.
 
-AnchorDB dibaca dari config global ~/.knlview/knl-config.json (URL, token,
-sync) sehingga semua project berbagi server yang sama. Nama model per
+AnchorDB bersifat opsional dan dibaca dari config global
+~/.knlview/knl-config.json (URL, token, sync) sehingga semua project
+yang memakainya berbagi server yang sama. Tanpa blok itu, viewer jalan
+lokal penuh dan tidak pernah menyentuh AnchorDB. Nama model per
 project dikelola lewat map "models" di knl-config.json: peran → nama,
 nama boleh acak karena peta mencatat tujuannya. Registry global
 ~/.knlview/models.json mencatat pemilik setiap nama model.
@@ -540,12 +542,13 @@ async function runInstallCommand(target, { values }) {
   }
 
   process.stdout.write(
-    `\nAnchorDB siap.\n` +
+    `\nAnchorDB siap (lapisan opsional — project tanpa blok anchordb\n` +
+      `  di config global tetap jalan lokal penuh).\n` +
       `  HTTP   http://127.0.0.1:${HTTP_PORT_DEFAULT}/health${started ? ' (sudah respons)' : ''}\n` +
       `  wire   wire://127.0.0.1:${WIRE_PORT_DEFAULT}\n` +
       `  token  ${token.slice(0, 8)}… (lengkap di ~/.knlview/knl-config.json)\n` +
       `  config ${home}/.knlview/knl-config.json\n\n` +
-      `Langkah berikutnya:\n` +
+      `Langkah berikutnya (kalau project ini mau memakai sync):\n` +
       `  1. Di project kamu: knl-view model new knowledges\n` +
       `  2. knl-view — baris "anchordb terhubung" muncul saat graf tersinkron\n`
   )

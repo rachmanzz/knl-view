@@ -144,7 +144,12 @@ The global registry `~/.knlview/models.json` records every name's owner
 project whose map has no entry for a role runs fully local: AnchorDB is
 touched only once the role is mapped.
 
-## Installing AnchorDB
+## Installing AnchorDB (optional)
+
+AnchorDB is an optional layer. Without it the viewer runs fully local:
+everything — browsing, search, the graph engine, and `knl-view graph trace`
+— works with zero setup. Installing AnchorDB only adds persistent causal
+tracing across sessions and shared sync between machines.
 
 `knl-view install anchordb` installs AnchorDB and writes the `anchordb`
 block into the global config:
@@ -226,6 +231,11 @@ The full field reference lives in the bundled skill:
 - **Zero Intermediary File**: Fully on-the-fly in-memory processing. Markdown files remain the sole source of truth without generating out-of-sync `graph.json` cache files.
 - **Decision Lineage Tracking**: Automatically discovers `supersedes`, `related_to`, and `affects_knowledge` edges from `decisionskills` decision blocks.
 - **Low-Token Subgraphs for AI**: Instead of loading an entire knowledge base into LLM context, query exact $N$-hop subgraphs in sub-milliseconds (< 1 ms).
+
+This engine is fully local — it needs no AnchorDB and no network. AnchorDB
+(see the optional install above) adds persistence on top: edges survive
+across sessions, are synced incrementally, and can be traced from any
+machine pointing at the same server.
 
 ### CLI Query
 

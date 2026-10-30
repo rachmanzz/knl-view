@@ -221,10 +221,11 @@ and inspect ownership with \`knl-view model check\`. Without a map entry
 for a role, that role runs fully local. CLI flags always win over
 config values.
 
-Installing AnchorDB: \`knl-view install anchordb\` — native binary from
-GitHub Releases on Linux (SHA256-verified), or a container from
-ghcr.io/rachmanzz/anchordb via docker/podman elsewhere (AnchorDB needs
-Linux mmap). Flags: \`--yes\`, \`--method=binary|container\`, \`--token=...\`.
+Installing AnchorDB (optional — the viewer runs fully local without it):
+\`knl-view install anchordb\` — native binary from GitHub Releases on
+Linux (SHA256-verified), or a container from ghcr.io/rachmanzz/anchordb
+via docker/podman elsewhere (AnchorDB needs Linux mmap). Flags:
+\`--yes\`, \`--method=binary|container\`, \`--token=...\`.
 
 ## Rules
 
