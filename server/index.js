@@ -77,6 +77,11 @@ export async function attachAnchorDB(server) {
     state.error = 'URL anchordb tidak bisa dibaca'
     return { ok: false, reason: state.error }
   }
+  if (!options.model) {
+    state.status = 'error'
+    state.error = 'nama model belum dipetakan'
+    return { ok: false, reason: 'peran "knowledges" belum ada di map "models" knl-config.json — jalankan: knl-view model new knowledges' }
+  }
   try {
     state.client = await createAnchorWireClient(options)
   } catch (err) {

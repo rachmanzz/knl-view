@@ -120,19 +120,29 @@ off and the viewer runs fully local:
 ```
 
 **Per project — `knl-config.json` at the project root** (gitignored): only
-`path`, `port`, `host`, and `model` — never the anchordb connection:
+`path`, `port`, `host`, and a `models` map — never the anchordb connection:
 
 ```json
 {
-  "port": 8085,
-  "model": "knowledges"
+  "port": 8091,
+  "models": {
+    "knowledges": "vez0vqrp",
+    "consensus": "n0qrnmsz"
+  }
 }
 ```
 
-The model is auto-namespaced as `{projectname}-{model}` (project name from
-`package.json` `name`, else the folder basename), so several projects can
-share one AnchorDB server without colliding: project `knl-view` serving
-`model: knowledges` uses model `knl-view-knowledges` on the server.
+Model names are owned by the `models` map: role → name, and the name can
+be anything (random names are fine — the map records what each name is
+*for*). Names stay stable even if the project folder is renamed. knl-view
+never invents names by itself: create them with
+`knl-view model new <role>` (writes the map and the global registry), and
+inspect ownership with `knl-view model check`.
+
+The global registry `~/.knlview/models.json` records every name's owner
+(project, role, path) and warns when two projects claim the same name. A
+project whose map has no entry for a role runs fully local: AnchorDB is
+touched only once the role is mapped.
 
 ## How a base is read
 

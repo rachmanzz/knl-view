@@ -9,10 +9,11 @@ import {
   globalConfigPath,
   syncStatePath,
   normalizeProjectConfig,
+  normalizeModels,
+  resolveModel,
   normalizeGlobalConfig,
   normalizeAnchordb,
   projectSlug,
-  qualifyModel,
   resolveSettings,
   anchordbClientOptions,
   DEFAULT_SETTINGS
@@ -151,7 +152,7 @@ describe('normalizeAnchordb', () => {
   })
 })
 
-describe('projectSlug and qualifyModel', () => {
+describe('projectSlug', () => {
   test('slug prefers package.json name, falls back to folder name', () => {
     const withPkg = makeDir({ 'package.json': JSON.stringify({ name: '@scope/My_App' }) })
     assert.equal(projectSlug(withPkg), 'scope-my-app')
@@ -160,11 +161,36 @@ describe('projectSlug and qualifyModel', () => {
     fs.mkdirSync(plain, { recursive: true })
     assert.equal(projectSlug(plain), 'knl-config-slug-proj')
   })
+})
 
-  test('qualifyModel namespaces and never double-prefixes', () => {
-    assert.equal(qualifyModel('decisions', 'chitchat'), 'chitchat-decisions')
-    assert.equal(qualifyModel('', 'chitchat'), 'chitchat-knowledges')
-    assert.equal(qualifyModel('chitchat-decisions', 'chitchat'), 'chitchat-decisions')
+describe('normalizeModels and resolveModel', () => {
+  test('map of role to model name is kept, invalid entries dropped', () => {
+    const models = normalizeModels({
+      knowledges: 'vx42k9',
+      consensus: 'm8qz1d',
+      'Bad Role': 'x',
+      broken: 'has space',
+      '': 'whatever'
+    })
+    assert.deepEqual(models, { knowledges: 'vx42k9', consensus: 'm8qz1d' })
+  })
+
+  test('resolveModel returns the mapped name verbatim, null when unmapped', () => {
+    const models = { knowledges: 'vx42k9' }
+    assert.equal(resolveModel(models, 'knowledges'), 'vx42k9')
+    assert.equal(resolveModel(models, 'consensus'), null)
+    assert.equal(resolveModel(null, 'knowledges'), null)
+    // Nama tidak pernah diubah: inilah alasan nama tetap stabil walau
+    // project/folder berganti nama.
+  })
+
+  test('project config accepts models map and legacy single model', async () => {
+    const dir = makeDir({
+      'knl-config.json': JSON.stringify({ models: { knowledges: 'vx42k9' }, model: 'old-way' })
+    })
+    const { config } = await readProjectConfig(dir)
+    assert.deepEqual(config.models, { knowledges: 'vx42k9' })
+    assert.equal(config.model, 'old-way')
   })
 })
 
@@ -174,6 +200,7 @@ describe('resolveSettings', () => {
       path: DEFAULT_SETTINGS.path,
       port: DEFAULT_SETTINGS.port,
       host: DEFAULT_SETTINGS.host,
+      models: null,
       anchordb: null
     })
   })
@@ -193,37 +220,47 @@ describe('resolveSettings', () => {
       path: 'cli/base',
       port: '7777',
       host: '0.0.0.0',
+      models: null,
       anchordb: null
     })
   })
 
-  test('global config activates anchordb, model comes from project config', () => {
+  test('global config activates anchordb, model comes from the project map', () => {
     const settings = resolveSettings({
       global: { anchordb: { url: 'wire://127.0.0.1:7448', token: 't1' } },
-      project: { model: 'decisions' },
-      projectName: 'chitchat'
+      project: { models: { knowledges: 'vx42k9' } }
     })
     assert.equal(settings.anchordb.url, 'wire://127.0.0.1:7448')
-    assert.equal(settings.anchordb.model, 'chitchat-decisions')
+    assert.equal(settings.anchordb.model, 'vx42k9')
+    assert.deepEqual(settings.models, { knowledges: 'vx42k9' })
   })
 
-  test('without project model the default is namespaced too', () => {
+  test('without a map entry the model stays unresolved (no silent default)', () => {
     const settings = resolveSettings({
-      global: { anchordb: 'wire://127.0.0.1:7448?token=t' },
-      projectName: 'knlview'
+      global: { anchordb: 'wire://127.0.0.1:7448?token=t' }
     })
-    assert.equal(settings.anchordb.model, 'knlview-knowledges')
+    assert.equal(settings.anchordb.model, null)
+    assert.equal(settings.models, null)
   })
 
-  test('CLI anchordb overrides global config, project model still wins', () => {
+  test('legacy single model field acts as models.knowledges', () => {
     const settings = resolveSettings({
-      cli: { anchordb: 'wire://10.0.0.9:7448?model=experiment' },
+      global: { anchordb: { url: 'wire://127.0.0.1:7448' } },
+      project: { model: 'old-way' }
+    })
+    assert.equal(settings.anchordb.model, 'old-way')
+    assert.deepEqual(settings.models, { knowledges: 'old-way' })
+  })
+
+  test('CLI anchordb overrides global config, project map still wins for the model', () => {
+    const settings = resolveSettings({
+      cli: { anchordb: 'wire://10.0.0.9:7448?model=fromurl' },
       global: { anchordb: { url: 'wire://127.0.0.1:7448', token: 't1' } },
-      project: { model: 'decisions' },
-      projectName: 'knlview'
+      project: { models: { knowledges: 'vx42k9' } }
     })
-    assert.equal(settings.anchordb.url, 'wire://10.0.0.9:7448?model=experiment')
-    assert.equal(settings.anchordb.model, 'knlview-decisions')
+    assert.equal(settings.anchordb.url, 'wire://10.0.0.9:7448?model=fromurl')
+    // Map menang atas ?model= di URL: nama model milik project, bukan sesi.
+    assert.equal(settings.anchordb.model, 'vx42k9')
   })
 
   test('invalid CLI anchordb resolves to null so the CLI can reject it', () => {

@@ -78,6 +78,10 @@ async function readConfigFile(abs, normalize) {
 /**
  * Saring config project ke field yang dikenal. Nilai tidak valid dilepas
  * (bukan fatal) supaya resolveSettings jatuh ke flag CLI atau bawaan.
+ *
+ * `models` adalah map peran → nama model AnchorDB (nama boleh acak; peta
+ * inilah yang mencatat tujuannya). Bentuk lama `model: "x"` tetap diterima
+ * sebagai kependekan dari models.knowledges.
  */
 export function normalizeProjectConfig(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -88,9 +92,41 @@ export function normalizeProjectConfig(raw) {
   if (port != null) config.port = String(port)
   const host = cleanString(raw.host)
   if (host) config.host = host
+  const models = normalizeModels(raw.models)
+  if (models) config.models = models
   const model = cleanString(raw.model)
   if (model) config.model = model
   return config
+}
+
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+const MODEL_ROLE_RE = /^[a-z][a-z0-9_-]*$/
+
+/**
+ * Saring map models: kunci = peran (slug kecil), nilai = nama model.
+ * Entri tidak valid dilepas, bukan fatal.
+ */
+export function normalizeModels(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const models = {}
+  for (const [role, name] of Object.entries(raw)) {
+    const roleSlug = String(role).trim().toLowerCase()
+    const nameStr = cleanString(name)
+    if (!MODEL_ROLE_RE.test(roleSlug) || !MODEL_NAME_RE.test(nameStr)) continue
+    models[roleSlug] = nameStr
+  }
+  return Object.keys(models).length ? models : null
+}
+
+/**
+ * Nama model untuk satu peran, apa adanya dari map. Tidak ada namespace
+ * otomatis: nama model sengaja stabil walau nama project/folder berubah.
+ * Mengembalikan null bila peran belum dipetakan (pemanggil yang memberi
+ * petunjuk "jalankan knl-view model new <role>").
+ */
+export function resolveModel(models, role = DEFAULT_MODEL) {
+  const name = models?.[role]
+  return typeof name === 'string' && name ? name : null
 }
 
 /**
@@ -126,7 +162,7 @@ export function normalizeAnchordb(raw) {
 }
 
 /**
- * Nama project untuk namespace model AnchorDB: field "name" package.json
+ * Nama project untuk catatan registry model: field "name" package.json
  * bila ada, kalau tidak nama folder project. Dibersihkan jadi slug aman.
  */
 export function projectSlug(cwd = process.cwd()) {
@@ -143,36 +179,37 @@ export function projectSlug(cwd = process.cwd()) {
 }
 
 /**
- * Namespace model: "{projectname}-{model}". Nama yang sudah berawalan slug
- * project dilewati apa adanya supaya tidak dobel.
- */
-export function qualifyModel(model, slug) {
-  const base = cleanString(model) || DEFAULT_MODEL
-  if (base.startsWith(`${slug}-`)) return base
-  return `${slug}-${base}`
-}
-
-/**
  * Gabungkan flag CLI, config project, config global, dan bawaan.
  *
  * - path/port/host: CLI > config project > bawaan
  * - anchordb: flag --anchordb > config global; mati total bila tidak ada
  *   keduanya (project tanpa config global tidak pernah menyentuh AnchorDB)
- * - model: config project > model di URL > bawaan, lalu di-namespace
- *   "{projectname}-{model}"
+ * - model: diambil dari map `models` config project (peran knowledges).
+ *   Nama di URL (?model=) hanya dipakai bila map tidak mengisinya.
  */
-export function resolveSettings({ cli = {}, project = null, global: globalConfig = null, projectName = 'project' } = {}) {
+export function resolveSettings({ cli = {}, project = null, global: globalConfig = null } = {}) {
   const p = project || {}
   const g = globalConfig || {}
   const anchordb = cli.anchordb !== undefined
     ? normalizeAnchordb(cli.anchordb)
     : normalizeAnchordb(g.anchordb)
-  if (anchordb) anchordb.model = qualifyModel(anchordb.model || p.model, projectName)
+
+  // Bentuk lama "model": "x" tetap berlaku sebagai models.knowledges.
+  const models = { ...(p.models || {}) }
+  if (!models[DEFAULT_MODEL] && typeof p.model === 'string' && p.model.trim()) {
+    models[DEFAULT_MODEL] = p.model.trim()
+  }
+  const hasModels = Object.keys(models).length > 0
+
+  if (anchordb) {
+    anchordb.model = (hasModels && resolveModel(models)) || cleanString(anchordb.model) || null
+  }
 
   return {
     path: pickString(cli.path, p.path) ?? DEFAULT_SETTINGS.path,
     port: pickString(cli.port, p.port) ?? DEFAULT_SETTINGS.port,
     host: pickString(cli.host, p.host) ?? DEFAULT_SETTINGS.host,
+    models: hasModels ? models : null,
     anchordb
   }
 }
@@ -197,7 +234,10 @@ export function anchordbClientOptions(anchordb) {
     if (Number.isInteger(port) && port > 0 && port <= 65535) options.port = port
   }
   options.token = anchordb.token || parsed.searchParams.get('token') || ''
-  options.model = anchordb.model || parsed.searchParams.get('model') || DEFAULT_MODEL
+  // Nama model datang dari map project (sudah di-resolve resolveSettings)
+  // atau query URL untuk sesi one-off. Sengaja tanpa default: model tanpa
+  // nama jelas tidak boleh diam-diam membuat model "knowledges" generik.
+  options.model = anchordb.model || parsed.searchParams.get('model') || ''
   return options
 }
 

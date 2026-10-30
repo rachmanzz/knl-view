@@ -204,18 +204,21 @@ stays completely off:
 \`\`\`
 
 **Per project: \`knl-config.json\` at the project root** — machine-local,
-gitignored. Holds only \`path\`, \`port\`, \`host\`, and \`model\`:
+gitignored. Holds only \`path\`, \`port\`, \`host\`, and the \`models\` map:
 
 \`\`\`json
 {
   "path": ".knowledges",
   "port": 8085,
-  "model": "knowledges"
+  "models": { "knowledges": "vez0vqrp" }
 }
 \`\`\`
 
-The model is auto-namespaced as \`{projectname}-{model}\` so several projects
-can share one AnchorDB server without colliding. CLI flags always win over
+The map owns model naming: role → AnchorDB model name, names may be
+random — the map records what each name is for, and names stay stable
+across project renames. Create names with \`knl-view model new <role>\`
+and inspect ownership with \`knl-view model check\`. Without a map entry
+for a role, that role runs fully local. CLI flags always win over
 config values.
 
 ## Rules

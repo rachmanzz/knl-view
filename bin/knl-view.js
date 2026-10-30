@@ -7,10 +7,15 @@ import { fileURLToPath } from 'node:url'
 import { createKnowledgeServer, attachAnchorDB } from '../server/index.js'
 import { scaffoldBase, seedSkill, ensureGitignore } from '../server/scaffold.js'
 import { buildGraphFromRoot } from '../server/graph/parser.js'
-import { readProjectConfig, readGlobalConfig, projectSlug, resolveSettings } from '../server/config.js'
+import { readProjectConfig, readGlobalConfig, projectSlug, resolveSettings, DEFAULT_MODEL } from '../server/config.js'
+import { readModelRegistry, registerModel, generateModelName, modelRegistryPath } from '../server/models_registry.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'))
+
+// Peran model harus slug kecil; dipakai runModelCommand (dipanggil dari
+// alur top-level, jadi dideklarasikan sebelum pemakaian).
+const MODEL_ROLE_RE = /^[a-z][a-z0-9_-]*$/
 
 const HELP = `knl-view ${pkg.version}
 Viewer lokal untuk basis pengetahuan .knowledges.
@@ -24,8 +29,15 @@ Bawaan --port/--path/--host bisa disimpan di knl-config.json di folder
 project (machine-local, gitignored). Flag CLI selalu menimpa config.
 
 AnchorDB dibaca dari config global ~/.knlview/knl-config.json (URL, token,
-sync) sehingga semua project berbagi server yang sama. Model per project
-diset di knl-config.json dan otomatis di-namespace: {project}-{model}.
+sync) sehingga semua project berbagi server yang sama. Nama model per
+project dikelola lewat map "models" di knl-config.json: peran → nama,
+nama boleh acak karena peta mencatat tujuannya. Registry global
+~/.knlview/models.json mencatat pemilik setiap nama model.
+
+Perintah:
+  model new <peran>         Buat nama model acak untuk peran (mis. knowledges),
+                            tulis ke knl-config.json dan registry global
+  model check               Periksa peta model project ini dan registry global
 
 Opsi:
   --port, -p <angka>      Port HTTP (bawaan: 8085, atau knl-config.json)
@@ -113,11 +125,36 @@ if (globalError) {
 const settings = resolveSettings({
   cli: values,
   project: projectConfig,
-  global: globalConfig,
-  projectName: projectSlug(process.cwd())
+  global: globalConfig
 })
 if (values.anchordb !== undefined && !settings.anchordb) {
   fail('--anchordb harus URL wire:// atau tcp://, contoh: --anchordb=wire://127.0.0.1:7448?token=xxx')
+}
+
+// Perintah "model": kelola peta peran → nama model AnchorDB. Kode lain
+// tidak pernah menebak nama; semuanya resolve lewat peran di map ini.
+const modelCommand = positionals?.[0] === 'model' ? positionals?.[1] : null
+if (modelCommand) {
+  await runModelCommand(modelCommand, positionals?.[2], { projectConfig, settings })
+  process.exit(0)
+}
+
+// Daftarkan seluruh map project ke registry global (memperbarui path/
+// timestamp bila memang milik project ini) dan peringatkan nama yang
+// diklaim project lain. Registrasi lokal ini tidak butuh koneksi server.
+if (settings.models) {
+  for (const [role, name] of Object.entries(settings.models)) {
+    const { previous, error } = await registerModel(name, {
+      role,
+      project: projectSlug(process.cwd()),
+      cwd: process.cwd()
+    })
+    if (error) {
+      process.stderr.write(`knl-view: registry model diabaikan (${error})\n`)
+    } else if (previous) {
+      process.stdout.write(`  peringatan: model "${name}" (${role}) juga dipakai project lain: ${previous.cwd}\n`)
+    }
+  }
 }
 
 const isGraphTrace = (positionals?.[0] === 'graph' && positionals?.[1] === 'trace') || values.target !== undefined
@@ -182,23 +219,32 @@ server.listen(port, settings.host, () => {
   )
 
   if (settings.anchordb) {
-    attachAnchorDB(server).then((result) => {
-      if (result.ok) {
-        let line = `  anchordb terhubung (${result.model}`
-        if (result.synced) {
-          if (result.failed) {
-            line += `, sync ${result.linked}+${result.unlinked} edge, ${result.failed} gagal (diulang saat start berikutnya)`
-          } else if (result.linked || result.unlinked) {
-            line += `, sync +${result.linked} -${result.unlinked} (${result.kept} edge tetap)`
-          } else {
-            line += `, graf sudah sinkron (${result.kept} edge)`
+    if (!settings.anchordb.model) {
+      // Map adalah satu-satunya sumber nama model; tanpa entri, AnchorDB
+      // sengaja tidak disentuh supaya tidak muncul nama tanpa makna.
+      process.stdout.write(
+        '  anchordb idle: peran "knowledges" belum dipetakan di knl-config.json\n' +
+          '    jalankan: knl-view model new knowledges\n'
+      )
+    } else {
+      attachAnchorDB(server).then((result) => {
+        if (result.ok) {
+          let line = `  anchordb terhubung (${result.model}`
+          if (result.synced) {
+            if (result.failed) {
+              line += `, sync ${result.linked}+${result.unlinked} edge, ${result.failed} gagal (diulang saat start berikutnya)`
+            } else if (result.linked || result.unlinked) {
+              line += `, sync +${result.linked} -${result.unlinked} (${result.kept} edge tetap)`
+            } else {
+              line += `, graf sudah sinkron (${result.kept} edge)`
+            }
           }
+          process.stdout.write(`${line})\n`)
+        } else {
+          process.stdout.write(`  anchordb gagal: ${result.reason} (viewer jalan lokal saja)\n`)
         }
-        process.stdout.write(`${line})\n`)
-      } else {
-        process.stdout.write(`  anchordb gagal: ${result.reason} (viewer jalan lokal saja)\n`)
-      }
-    })
+      })
+    }
   }
 })
 
@@ -316,3 +362,71 @@ function fail(message) {
   process.stderr.write(`knl-view: ${message}\n`)
   process.exit(1)
 }
+
+// Perintah "model new" dan "model check": mengelola peta peran → nama
+// model AnchorDB. Nama boleh acak; yang memberi makna adalah peta ini
+// plus registry global ~/.knlview/models.json (pemilik setiap nama).
+
+async function runModelCommand(sub, roleArg, { projectConfig, settings }) {
+  if (sub === 'new') {
+    const role = (roleArg || '').trim().toLowerCase()
+    if (!MODEL_ROLE_RE.test(role)) {
+      fail(`Peran harus slug kecil (huruf, angka, -, _), dapat "${roleArg || '(kosong)'}".\nContoh: knl-view model new knowledges`)
+    }
+    const existing = settings.models?.[role]
+    if (existing) {
+      fail(`Peran "${role}" sudah dipetakan ke model "${existing}".\nEdit knl-config.json bila memang mau diganti.`)
+    }
+    const name = generateModelName()
+    const { previous, error } = await registerModel(name, {
+      role,
+      project: projectSlug(process.cwd()),
+      cwd: process.cwd()
+    })
+    if (error) fail(`Registry gagal ditulis (${error}). Nama baru tidak jadi dipakai.`)
+    if (previous) {
+      fail(`Nama "${name}" sudah dipakai project lain (${previous.cwd}) untuk peran "${previous.role}".\nJalankan ulang untuk nama baru.`)
+    }
+    const next = { ...projectConfig, models: { ...(projectConfig?.models || {}), [role]: name } }
+    delete next.model // map menggantikan bentuk lama "model"
+    fs.writeFileSync(path.join(process.cwd(), 'knl-config.json'), JSON.stringify(next, null, 2) + '\n', 'utf8')
+    process.stdout.write(
+      `model ${name} → peran ${role}\n` +
+        `  knl-config.json: models.${role} = "${name}"\n` +
+        `  registry: ${modelRegistryPath()}\n`
+    )
+    return
+  }
+
+  if (sub === 'check') {
+    const { models: registry, error } = await readModelRegistry()
+    if (error) process.stderr.write(`knl-view: registry diabaikan (${error})\n`)
+    const cwd = path.resolve(process.cwd())
+    const map = settings.models || {}
+    const roles = Object.keys(map)
+    process.stdout.write(`Peta model project ini (${projectSlug(cwd)}):\n`)
+    if (!roles.length) {
+      process.stdout.write('  (kosong — jalankan "knl-view model new knowledges")\n')
+    }
+    for (const role of roles) {
+      const name = map[role]
+      const entry = registry[name]
+      const owner = entry ? `${entry.project}/${entry.role}` : 'belum terdaftar'
+      const clash = entry && path.resolve(entry.cwd || '') !== cwd
+      process.stdout.write(`  ${role.padEnd(12)} ${name}  (${owner}${clash ? ' — TABRAKAN: diklaim ' + entry.cwd : ''})\n`)
+    }
+    const others = Object.entries(registry).filter(([, e]) => path.resolve(e.cwd || '') !== cwd)
+    if (others.length) {
+      process.stdout.write('Model project lain di registry:\n')
+      for (const [name, e] of others) {
+        process.stdout.write(`  ${name}  → ${e.project}/${e.role}  (${e.cwd})\n`)
+      }
+    }
+    process.stdout.write('Catatan: keberadaan model di server tidak bisa dicek lewat wire protocol;\n')
+    process.stdout.write('yang diperiksa di sini konsistensi peta, registry, dan kepemilikan nama.\n')
+    return
+  }
+
+  fail(`Perintah model tidak dikenal: ${sub || '(kosong)'}\nGunakan "model new <peran>" atau "model check".`)
+}
+
