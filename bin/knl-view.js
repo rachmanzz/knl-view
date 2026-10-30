@@ -797,6 +797,7 @@ async function runSourcesCommand(sub, values, { settings }) {
     if (result.linked) parts.push(`+${result.linked} linked`)
     if (result.unlinked) parts.push(`-${result.unlinked} unlinked`)
     if (result.saved) parts.push(`${result.saved} records saved`)
+    if (result.tombstoned) parts.push(`${result.tombstoned} tombstoned`)
     if (result.failed) parts.push(`${result.failed} FAILED`)
     process.stdout.write(`sources synced: ${parts.join(', ')}\n`)
     if (result.failed) {

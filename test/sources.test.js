@@ -173,7 +173,7 @@ describe('syncSourcesToAnchorDB', () => {
     const client = statefulClient()
     const result = await syncSourcesToAnchorDB(client, root)
 
-    assert.deepEqual(result, { linked: 2, unlinked: 0, saved: 2, failed: 0, nodes: 2, edges: 1 })
+    assert.deepEqual(result, { linked: 2, unlinked: 0, saved: 2, tombstoned: 0, failed: 0, nodes: 2, edges: 1 })
     assert.ok(client.ops.linked.includes('a.js\u0000imports\u0000b.js'))
     assert.ok(client.ops.linked.includes('b.js\u0000imported_by\u0000a.js'))
   })
@@ -209,7 +209,7 @@ describe('syncSourcesToAnchorDB', () => {
     assert.ok(client.ops.linked.includes('c.js\u0000imported_by\u0000b.js'))
   })
 
-  test('a removed file loses its edges and is never re-saved', async () => {
+  test('a removed file loses its edges and is tombstoned', async () => {
     const root = makeRepo()
     write(root, 'a.js', "import './b.js'\n")
     write(root, 'b.js', '')
@@ -219,11 +219,48 @@ describe('syncSourcesToAnchorDB', () => {
     fs.rmSync(path.join(root, 'b.js'))
     const second = await syncSourcesToAnchorDB(client, root)
     assert.equal(second.unlinked, 2)
+    assert.equal(second.tombstoned, 1)
     assert.ok(client.ops.unlinked.includes('a.js\u0000imports\u0000b.js'))
     assert.ok(client.ops.unlinked.includes('b.js\u0000imported_by\u0000a.js'))
-    // The record itself is not deletable in the protocol; it just loses
-    // every edge, so traces never reach it again.
-    assert.ok(client.records.has('b.js'))
+    // The record itself is not deletable in the protocol; the tombstone
+    // attribute marks it gone, so later syncs and traces skip it.
+    assert.equal(client.records.get('b.js').tombstone, 2)
+  })
+
+  test('a tombstoned record is invisible to the next sync', async () => {
+    const root = makeRepo()
+    write(root, 'a.js', "import './b.js'\n")
+    write(root, 'b.js', '')
+    const client = statefulClient()
+    await syncSourcesToAnchorDB(client, root)
+    fs.rmSync(path.join(root, 'b.js'))
+    await syncSourcesToAnchorDB(client, root)
+    const savesBefore = client.ops.saved.length
+
+    const third = await syncSourcesToAnchorDB(client, root)
+    assert.deepEqual(
+      { linked: third.linked, unlinked: third.unlinked, saved: third.saved, tombstoned: third.tombstoned },
+      { linked: 0, unlinked: 0, saved: 0, tombstoned: 0 }
+    )
+    assert.equal(client.ops.saved.length, savesBefore)
+  })
+
+  test('a reappearing file lifts the tombstone and relinks its edges', async () => {
+    const root = makeRepo()
+    write(root, 'a.js', "import './b.js'\n")
+    write(root, 'b.js', '')
+    const client = statefulClient()
+    await syncSourcesToAnchorDB(client, root)
+    fs.rmSync(path.join(root, 'b.js'))
+    await syncSourcesToAnchorDB(client, root)
+
+    write(root, 'b.js', '')
+    const back = await syncSourcesToAnchorDB(client, root)
+    assert.equal(back.linked, 2)
+    assert.equal(back.saved, 1)
+    const props = client.records.get('b.js')
+    assert.equal(props.tombstone, 0)
+    assert.ok(Number.isInteger(props.size) && Number.isInteger(props.mtime))
   })
 })
 

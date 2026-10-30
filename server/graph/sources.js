@@ -15,11 +15,16 @@ import { edgeKey } from './anchordb_client.js'
 // in both directions (imports and imported_by) because causalChain walks
 // forward only, and both directions are needed for lineage. Sync is
 // server-authoritative: it enumerates what the server already has instead
-// of trusting a local mirror. A removed file leaves its record behind (the
-// protocol has no delete) but with zero edges, so it never shows up in a
-// trace.
+// of trusting a local mirror.
+//
+// Removed files: the protocol has no delete, so their record is marked with
+// the tombstone attribute (2 = gone, 0 = alive) after its edges are
+// unlinked. Tombstoned records are skipped by every later sync and are
+// unreachable in a trace; if the file reappears, a normal attribute save
+// lifts the tombstone and the edges are relinked.
 
 export const SOURCE_RELATIONS = ['imports', 'imported_by']
+export const SOURCE_TOMBSTONE = 2
 const DEFAULT_IGNORES = ['node_modules', 'dist', 'build', 'coverage']
 
 const JS_EXTS = new Set(['.js', '.mjs', '.cjs'])
@@ -195,13 +200,18 @@ export function desiredSourceEdgeKeys(edges) {
 export async function syncSourcesToAnchorDB(client, rootAbs) {
   const { nodes, edges } = await buildSourcesGraph(rootAbs)
   const desired = desiredSourceEdgeKeys(edges)
+  const diskIds = new Set(nodes.map((node) => node.id))
 
   // Page through the full record list: server truth for which nodes exist.
+  // Tombstoned records are invisible: not nodes, not seeds, not savable.
   const serverAttrs = new Map()
   let offset = 0
   for (;;) {
     const page = await client.list({ limit: 500, offset })
-    for (const item of page.items || []) serverAttrs.set(item.name, item.props || {})
+    for (const item of page.items || []) {
+      if ((item.props || {}).tombstone === SOURCE_TOMBSTONE) continue
+      serverAttrs.set(item.name, item.props || {})
+    }
     if (!page.hasMore || !page.items?.length) break
     offset += page.items.length
   }
@@ -228,6 +238,7 @@ export async function syncSourcesToAnchorDB(client, rootAbs) {
   let linked = 0
   let unlinked = 0
   let saved = 0
+  let tombstoned = 0
   let failed = 0
 
   for (const key of desired) {
@@ -251,20 +262,38 @@ export async function syncSourcesToAnchorDB(client, rootAbs) {
     }
   }
 
+  // Server records whose file is gone: their edges are already unlinked
+  // above; mark them with the tombstone attribute so no later sync or trace
+  // ever reaches them again.
+  for (const name of serverAttrs.keys()) {
+    if (diskIds.has(name)) continue
+    try {
+      await client.saveWithID(name, { tombstone: SOURCE_TOMBSTONE })
+      tombstoned += 1
+    } catch {
+      failed += 1
+    }
+  }
+
   // Node records carry the numeric attributes. Existing records are only
-  // re-saved when their attributes changed.
+  // re-saved when their attributes changed; tombstone 0 keeps the alive
+  // state explicit even if the server merges attributes.
   for (const node of nodes) {
     const current = serverAttrs.get(node.id)
     if (current && current.size === node.metadata.size && current.mtime === node.metadata.mtime) continue
     try {
-      await client.saveWithID(node.id, { size: node.metadata.size, mtime: node.metadata.mtime })
+      await client.saveWithID(node.id, {
+        size: node.metadata.size,
+        mtime: node.metadata.mtime,
+        tombstone: 0
+      })
       saved += 1
     } catch {
       failed += 1
     }
   }
 
-  return { linked, unlinked, saved, failed, nodes: nodes.length, edges: desired.size / 2 }
+  return { linked, unlinked, saved, tombstoned, failed, nodes: nodes.length, edges: desired.size / 2 }
 }
 
 /**
