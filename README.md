@@ -304,8 +304,8 @@ A third AnchorDB model, the `sources` role in the models map, holds the
 dependency graph of the whole project, not just `.knowledges`: every file
 becomes a node (id = repo-relative path; hidden folders are skipped except
 `.github`, and `node_modules`, `dist`, and `.gitignore` patterns are
-ignored), and import edges are extracted with tree-sitter (no regex; the
-JS family and Go today, one grammar package per language). Edges are stored
+ignored), and import edges are extracted with tree-sitter syntax parsing
+(the JS family and Go today, one grammar package per language). Edges are stored
 in both directions (`imports`, `imported_by`) so lineage works without any
 local mirror: sync is server-authoritative, enumerating the server's own
 records and edges before applying the difference from a fresh disk scan.

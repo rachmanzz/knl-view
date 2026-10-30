@@ -3,10 +3,9 @@ import { Parser, Language } from 'web-tree-sitter'
 
 // Syntax-aware import extraction with tree-sitter (web-tree-sitter, WASM).
 // One uniform parser API for every supported language: adding a language
-// means adding one grammar package and one extraction case, not a new
-// hand-written regex. Grammars are lazy-loaded only when the scanned
-// project actually contains files of that language, and nothing is parsed
-// with regex heuristics.
+// means adding one grammar package and one extraction case. Grammars are
+// lazy-loaded only when the scanned project actually contains files of
+// that language.
 //
 // Extraction returns the raw import specifiers of a file; deciding which
 // of them point inside the project is the resolver's job (sources.js), so
@@ -19,7 +18,7 @@ const GRAMMAR_WASM = {
   go: 'tree-sitter-go/tree-sitter-go.wasm'
 }
 
-/** File extensions mapped to a grammar name. The JS family shares one. */
+/** The JS family shares one grammar; each other extension has its own. */
 export const SYNTAX_LANGUAGES = {
   '.js': 'javascript',
   '.mjs': 'javascript',
@@ -50,7 +49,6 @@ function parserFor(name, lang) {
   return parsers.get(name)
 }
 
-/** First descendant (or self) of the given node type, depth-first. */
 function firstDescendant(node, type) {
   if (node.type === type) return node
   for (let i = 0; i < node.childCount; i++) {
