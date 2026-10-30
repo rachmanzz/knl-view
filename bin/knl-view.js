@@ -6,6 +6,7 @@ import readline from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import { createKnowledgeServer } from '../server/index.js'
 import { scaffoldBase, seedSkill, ensureGitignore } from '../server/scaffold.js'
+import { readProjectConfig, readGlobalConfig, projectSlug, resolveSettings } from '../server/config.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'))
@@ -17,10 +18,13 @@ Pemakaian:
   knl-view --port 8086 --path=.knowledges
   knl-view --init --path=.knowledges
 
+Bawaan --port/--path/--host bisa disimpan di knl-config.json di folder
+project (machine-local, gitignored). Flag CLI selalu menimpa config.
+
 Opsi:
-  --port, -p <angka>      Port HTTP (bawaan: 8085)
-  --path <folder>         Folder basis pengetahuan (bawaan: .knowledges)
-  --host <alamat>         Alamat bind (bawaan: 127.0.0.1)
+  --port, -p <angka>      Port HTTP (bawaan: 8085, atau knl-config.json)
+  --path <folder>         Folder basis pengetahuan (bawaan: .knowledges, atau knl-config.json)
+  --host <alamat>         Alamat bind (bawaan: 127.0.0.1, atau knl-config.json)
   --init                  Bangun basis baru lewat wizard (tidak memulai server)
   --structure <susunan>   Susunan saat --init non-interaktif:
                           standard | empty | custom (bawaan: standard)
@@ -43,9 +47,9 @@ let values
 try {
   ({ values } = parseArgs({
     options: {
-      port: { type: 'string', short: 'p', default: '8085' },
-      path: { type: 'string', default: '.knowledges' },
-      host: { type: 'string', default: '127.0.0.1' },
+      port: { type: 'string', short: 'p' },
+      path: { type: 'string' },
+      host: { type: 'string' },
       init: { type: 'boolean', default: false },
       structure: { type: 'string', default: 'standard' },
       folders: { type: 'string', default: '' },
@@ -80,17 +84,34 @@ if (values.version) {
   process.exit(0)
 }
 
+// Config dua lapis: project (knl-config.json) dan global (~/.knlview/).
+// File hilang tidak masalah; rusak diabaikan dengan satu peringatan di
+// stderr supaya nilai yang tidak terpakai tidak misterius.
+const { config: projectConfig, error: projectError } = await readProjectConfig()
+if (projectError) {
+  process.stderr.write(`knl-view: knl-config.json diabaikan (${projectError})\n`)
+}
+const { config: globalConfig, error: globalError } = await readGlobalConfig()
+if (globalError) {
+  process.stderr.write(`knl-view: ~/.knlview/knl-config.json diabaikan (${globalError})\n`)
+}
+const settings = resolveSettings({
+  cli: values,
+  project: projectConfig,
+  global: globalConfig,
+  projectName: projectSlug(process.cwd())
+})
 if (values.init || values['seed-skill'] !== undefined) {
   await runSetup()
   process.exit(0)
 }
 
-const port = Number(values.port)
+const port = Number(settings.port)
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  fail(`--port harus angka 1-65535, dapat "${values.port}".`)
+  fail(`--port harus angka 1-65535, dapat "${settings.port}".`)
 }
 
-const root = path.resolve(process.cwd(), values.path)
+const root = path.resolve(process.cwd(), settings.path)
 if (!fs.existsSync(root)) {
   fail(`Folder tidak ditemukan: ${root}\nCek --path, atau jalankan dari folder project yang punya .knowledges.`)
 }
@@ -103,7 +124,7 @@ if (!fs.existsSync(path.join(dist, 'index.html'))) {
   fail(`Antarmuka belum dibangun (${dist}).\nJalankan dulu: npm run build`)
 }
 
-const server = createKnowledgeServer({ root, dist, host: values.host, port })
+const server = createKnowledgeServer({ root, dist, host: settings.host, port })
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
@@ -112,8 +133,8 @@ server.on('error', (err) => {
   fail(`Server gagal dijalankan: ${err.message}`)
 })
 
-server.listen(port, values.host, () => {
-  const addr = `http://${values.host}:${port}`
+server.listen(port, settings.host, () => {
+  const addr = `http://${settings.host}:${port}`
   process.stdout.write(
     `knl-view ${pkg.version}\n` +
       `  alamat   ${addr}\n` +
@@ -126,7 +147,7 @@ server.listen(port, values.host, () => {
 // --yes; selain itu pakai jawaban bawaan supaya tidak pernah menggantung
 // (pipe, CI, atau skrip).
 async function runSetup() {
-  const root = path.resolve(process.cwd(), values.path)
+  const root = path.resolve(process.cwd(), settings.path)
   const interactive = Boolean(process.stdin.isTTY) && !values.yes
   const rl = interactive ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null
 
