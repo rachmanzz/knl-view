@@ -5,3 +5,4 @@ node_modules/
 .opencode/
 GEMINI.md
 .agents/
+dist/
