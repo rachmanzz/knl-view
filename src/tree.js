@@ -60,7 +60,7 @@ const byName = (a, b) => a.name.localeCompare(b.name, 'id', { numeric: true, sen
 // One sort rule for all index lists: documents first, then folders.
 // When the map sets `order`, ordered entries come first (ascending); the rest
 // fall back to the usual name rule. The map only decorates order, not
-// membership — the list is still born from the disk contents.
+// membership; the list is still born from the disk contents.
 export function orderForIndex(nodes) {
   const withOrder = nodes.filter((n) => n.order != null)
   const withoutOrder = nodes.filter((n) => n.order == null)

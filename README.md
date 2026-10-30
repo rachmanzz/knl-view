@@ -105,7 +105,7 @@ machine unless you pass `--host` yourself. There is no authentication; treat
 Two optional config files. A missing file is never an error; a broken file is
 ignored with one warning on stderr. CLI flags always win over config values.
 
-**Global — `~/.knlview/knl-config.json`**: shared by every project on the
+**Global (`~/.knlview/knl-config.json`)**: shared by every project on the
 machine. Holds the `anchordb` block. Without it, AnchorDB stays completely
 off and the viewer runs fully local:
 
@@ -119,8 +119,8 @@ off and the viewer runs fully local:
 }
 ```
 
-**Per project — `knl-config.json` at the project root** (gitignored): only
-`path`, `port`, `host`, and a `models` map — never the anchordb connection:
+**Per project: `knl-config.json` at the project root** (gitignored): only
+`path`, `port`, `host`, and a `models` map, never the anchordb connection:
 
 ```json
 {
@@ -133,7 +133,7 @@ off and the viewer runs fully local:
 ```
 
 Model names are owned by the `models` map: role → name, and the name can
-be anything (random names are fine — the map records what each name is
+be anything (random names are fine; the map records what each name is
 *for*). Names stay stable even if the project folder is renamed. knl-view
 never invents names by itself: create them with
 `knl-view model new <role>` (writes the map and the global registry), and
@@ -147,8 +147,8 @@ touched only once the role is mapped.
 ## Installing AnchorDB (optional)
 
 AnchorDB is an optional layer. Without it the viewer runs fully local:
-everything — browsing, search, the graph engine, and `knl-view graph trace`
-— works with zero setup. Installing AnchorDB only adds persistent causal
+everything (browsing, search, the graph engine, and `knl-view graph trace`)
+works with zero setup. Installing AnchorDB only adds persistent causal
 tracing across sessions and shared sync between machines.
 
 `knl-view install anchordb` installs AnchorDB and writes the `anchordb`
@@ -166,7 +166,7 @@ block into the global config:
 Non-interactive (CI/scripts): add `--yes`. Explicit method: `--method=binary`
 or `--method=container`. Fixed token instead of a random one: `--token=...`.
 If a container named `anchordb-knlview` already exists, the installer stops
-instead of removing it — data must not disappear by accident.
+instead of removing it: data must not disappear by accident.
 
 ## How a base is read
 
@@ -232,22 +232,22 @@ The full field reference lives in the bundled skill:
 - **Decision Lineage Tracking**: Automatically discovers `supersedes`, `related_to`, and `affects_knowledge` edges from `decisionskills` decision blocks.
 - **Low-Token Subgraphs for AI**: Instead of loading an entire knowledge base into LLM context, query exact $N$-hop subgraphs in sub-milliseconds (< 1 ms).
 
-This engine is fully local — it needs no AnchorDB and no network. AnchorDB
+This engine is fully local: it needs no AnchorDB and no network. AnchorDB
 (see the optional install above) adds persistence on top: edges survive
 across sessions, are synced incrementally, and can be traced from any
 machine pointing at the same server.
 
 ### Two-way lineage
 
-Traces walk in a mechanically defined direction relative to the edges —
+Traces walk in a mechanically defined direction relative to the edges,
 never interpreted as cause and effect (`depends_on` edges *leave* a
 decision while pointing at its upstream, so up/down labels would lie):
 
-- `direction=out` — edges leaving the target: what it supersedes,
+- `direction=out`: edges leaving the target: what it supersedes,
   `depends_on`, or affects.
-- `direction=in` — edges entering the target: what references or
+- `direction=in`: edges entering the target: what references or
   replaces it.
-- `direction=both` — the default for the local graph trace; the full
+- `direction=both`: the default for the local graph trace; the full
   neighborhood.
 
 Every returned node carries `via` (`center`, `in`, `out`, or `in+out`)
@@ -259,7 +259,7 @@ HTTP: `GET /api/graph/trace?target=<id>&direction=in`
 The AnchorDB endpoint adds the same parameter,
 `GET /api/anchordb/trace?target=<id>&direction=in|out|both` (default
 `out`): `out` is scored server-side via `causalChain`; `in` is walked
-backwards from the local sync mirror — the wire protocol has no reverse
+backwards from the local sync mirror; the wire protocol has no reverse
 query, and the mirror holds every edge this project ever linked, so it
 is exactly the inbound map for this project's model. Mirror results
 carry score 1 and the response reports `mirrored: true`/`false` so

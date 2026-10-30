@@ -190,7 +190,7 @@ export async function traceCausalChain(client, seedId, relations = ['supersedes'
 }
 
 /**
- * Reverse traversal over the local sync mirror — the inbound half of
+ * Reverse traversal over the local sync mirror: the inbound half of
  * two-way lineage. The wire protocol has no "who points at X" query, but
  * the mirror holds every edge this project ever linked, which is exactly
  * the inbound map for this project's model. Entries carry score 1: the

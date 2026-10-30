@@ -15,9 +15,9 @@ Lede: write a one-paragraph summary of this base here.
 
 ## How to read
 
-- \`roadmap/\` — direction and plans.
-- \`features/\` — feature notes.
-- \`docs/\` — general documents.
+- \`roadmap/\`: direction and plans.
+- \`features/\`: feature notes.
+- \`docs/\`: general documents.
 
 Add \`map.json\` to this folder if you want to control menu labels and
 display order without moving files. See the \`knl-view\` skill for the
@@ -190,7 +190,7 @@ not repeated inside the tree.
 knl-view reads two optional config files. A missing file is never an error;
 a broken file is ignored with one warning.
 
-**Global: \`~/.knlview/knl-config.json\`** — shared by every project on this
+**Global (\`~/.knlview/knl-config.json\`)**: shared by every project on this
 machine. Holds the \`anchordb\` block (connection). Without it, AnchorDB
 stays completely off:
 
@@ -204,7 +204,7 @@ stays completely off:
 }
 \`\`\`
 
-**Per project: \`knl-config.json\` at the project root** — machine-local,
+**Per project: \`knl-config.json\` at the project root**, machine-local,
 gitignored. Holds only \`path\`, \`port\`, \`host\`, and the \`models\` map:
 
 \`\`\`json
@@ -216,20 +216,20 @@ gitignored. Holds only \`path\`, \`port\`, \`host\`, and the \`models\` map:
 \`\`\`
 
 The map owns model naming: role → AnchorDB model name, names may be
-random — the map records what each name is for, and names stay stable
+random; the map records what each name is for, and names stay stable
 across project renames. Create names with \`knl-view model new <role>\`
 and inspect ownership with \`knl-view model check\`. Without a map entry
 for a role, that role runs fully local. CLI flags always win over
 config values.
 
-Installing AnchorDB (optional — the viewer runs fully local without it):
-\`knl-view install anchordb\` — native binary from GitHub Releases on
+Installing AnchorDB (optional; the viewer runs fully local without it):
+\`knl-view install anchordb\`: native binary from GitHub Releases on
 Linux and macOS (SHA256-verified), or a container from
 ghcr.io/rachmanzz/anchordb via docker/podman on other platforms. Flags:
 \`--yes\`, \`--method=binary|container\`, \`--token=...\`.
 
 Two-way lineage: graph traces take \`--direction\` (CLI) or
-\`?direction=\` (HTTP) — \`out\` follows edges leaving the target, \`in\`
+\`?direction=\` (HTTP): \`out\` follows edges leaving the target, \`in\`
 follows edges entering it, \`both\` is the local default. Direction is
 mechanical (edge direction), never cause-and-effect interpretation.
 Each node in the result carries \`via\` (\`center\`, \`in\`, \`out\`,
@@ -237,12 +237,12 @@ Each node in the result carries \`via\` (\`center\`, \`in\`, \`out\`,
 walked backwards from the local sync mirror and reported with
 \`mirrored: true\`.
 
-Consensus (claims): a second AnchorDB model — the \`consensus\` role in
-the models map — holds agreement and conflict between claims only (never
+Consensus (claims): a second AnchorDB model (the \`consensus\` role in
+the models map) holds agreement and conflict between claims only (never
 decisions or files). Claims are content-addressed:
 \`knl-view consensus claim "<statement>"\` prints the id (\`c-\` + 16 hex
 chars of the statement hash); the same text is the same claim everywhere.
-Relations: \`agree\`, \`contradict\`, \`retract\` — all take two claim
+Relations: \`agree\`, \`contradict\`, \`retract\` take two claim
 ids. \`status <id>\` derives: any incoming \`contradicts\` → \`disputed\`,
 else incoming \`agrees_with\` → \`consensus\`, else \`uncontested\`.
 \`list\` shows every locally known claim. Mutations are CLI-only;

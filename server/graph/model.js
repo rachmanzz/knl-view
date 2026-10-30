@@ -80,10 +80,10 @@ export class DirectedGraph {
   // Radius-based N-hop sub-graph extraction (cheap enough to feed to an LLM).
   //
   // `direction` selects which edges the BFS may walk, mechanically relative
-  // to the edges themselves — never interpreted as cause and effect:
-  //   'out'  — edges leaving the target (what it supersedes / depends_on / affects)
-  //   'in'   — edges entering the target (what references or replaces it)
-  //   'both' — the default; the full neighborhood as before
+  // to the edges themselves, never interpreted as cause and effect:
+  //   'out':  edges leaving the target (what it supersedes / depends_on / affects)
+  //   'in':   edges entering the target (what references or replaces it)
+  //   'both': the default; the full neighborhood as before
   // Each returned node carries `via`: how it connects to the center
   // ('center', 'in', 'out', or 'in+out' when reachable both ways).
   extractSubGraph(startId, maxHops = 2, direction = 'both') {

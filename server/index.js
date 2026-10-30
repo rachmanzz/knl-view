@@ -260,10 +260,10 @@ async function handleAnchorTrace(res, state, url) {
   const direction = rawDirection || 'out'
 
   // Mechanically directional, never cause-and-effect:
-  //   out  — follow the relations forward from the target (server-scored)
-  //   in   — who references the target: walked from the local sync mirror,
-  //          because the wire protocol has no reverse query
-  //   both — union of the two, best score wins per word
+  //   out:  follow the relations forward from the target (server-scored)
+  //   in:   who references the target: walked from the local sync mirror,
+  //         because the wire protocol has no reverse query
+  //   both: union of the two, best score wins per word
   const maxHops = Number.isInteger(hops) && hops > 0 ? hops : 2
   const limitK = Number.isInteger(limit) && limit > 0 ? limit : 20
   try {
