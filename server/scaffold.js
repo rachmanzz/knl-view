@@ -227,6 +227,15 @@ Linux (SHA256-verified), or a container from ghcr.io/rachmanzz/anchordb
 via docker/podman elsewhere (AnchorDB needs Linux mmap). Flags:
 \`--yes\`, \`--method=binary|container\`, \`--token=...\`.
 
+Two-way lineage: graph traces take \`--direction\` (CLI) or
+\`?direction=\` (HTTP) — \`out\` follows edges leaving the target, \`in\`
+follows edges entering it, \`both\` is the local default. Direction is
+mechanical (edge direction), never cause-and-effect interpretation.
+Each node in the result carries \`via\` (\`center\`, \`in\`, \`out\`,
+\`in+out\`). On /api/anchordb/trace the default is \`out\`; \`in\` is
+walked backwards from the local sync mirror and reported with
+\`mirrored: true\`.
+
 ## Rules
 
 - Never move or delete files to satisfy the map. Either add the file or

@@ -41,7 +41,7 @@ Viewer lokal untuk basis pengetahuan .knowledges.
 Pemakaian:
   knl-view --port 8086 --path=.knowledges
   knl-view --init --path=.knowledges
-  knl-view graph trace --target=<id> [--hops=2] [--path=.knowledges]
+  knl-view graph trace --target=<id> [--hops=2] [--direction=in|out|both] [--path=.knowledges]
 
 Bawaan --port/--path/--host bisa disimpan di knl-config.json di folder
 project (machine-local, gitignored). Flag CLI selalu menimpa config.
@@ -70,6 +70,8 @@ Opsi:
                           "anchordb" di knl-config.json
   --method <metode>       Metode "install anchordb": binary | container
   --token <teks>          Token auth untuk "install anchordb" (bawaan: acak)
+  --direction <arah>      Arah lineage "graph trace": in | out | both
+                          (bawaan: both; lihat README "Two-way lineage")
   --target <id>           ID simpul target untuk kueri sub-graf
   --hops <angka>          Radius hop penelusuran graf (bawaan: 2)
   --init                  Bangun basis baru lewat wizard (tidak memulai server)
@@ -103,6 +105,7 @@ try {
       method: { type: 'string' },
       token: { type: 'string' },
       target: { type: 'string' },
+      direction: { type: 'string' },
       hops: { type: 'string', default: '2' },
       init: { type: 'boolean', default: false },
       structure: { type: 'string', default: 'standard' },
@@ -195,18 +198,25 @@ const isGraphTrace = (positionals?.[0] === 'graph' && positionals?.[1] === 'trac
 if (isGraphTrace) {
   const target = values.target || positionals?.[2]
   if (!target) {
-    fail('Parameter --target wajib disertakan:\n  knl-view graph trace --target=<id> [--hops=2]')
+    fail('Parameter --target is required:\n  knl-view graph trace --target=<id> [--hops=2] [--direction=in|out|both]')
   }
   const root = path.resolve(process.cwd(), settings.path)
   if (!fs.existsSync(root)) {
-    fail(`Folder tidak ditemukan: ${root}\nCek --path, atau jalankan dari folder project yang punya .knowledges.`)
+    fail(`Folder not found: ${root}\nCheck --path, or run from a project folder that has a .knowledges base.`)
   }
   if (!fs.statSync(root).isDirectory()) {
-    fail(`--path harus folder, bukan berkas: ${root}`)
+    fail(`--path must be a folder, not a file: ${root}`)
   }
   const hops = parseInt(values.hops || '2', 10)
+  let direction = 'both'
+  if (values.direction !== undefined) {
+    if (!['in', 'out', 'both'].includes(values.direction)) {
+      fail(`--direction must be in, out, or both, got "${values.direction}".`)
+    }
+    direction = values.direction
+  }
   const graph = await buildGraphFromRoot(root)
-  const subGraph = graph.extractSubGraph(target, Number.isInteger(hops) && hops > 0 ? hops : 2)
+  const subGraph = graph.extractSubGraph(target, Number.isInteger(hops) && hops > 0 ? hops : 2, direction)
   process.stdout.write(JSON.stringify(subGraph, null, 2) + '\n')
   process.exit(0)
 }

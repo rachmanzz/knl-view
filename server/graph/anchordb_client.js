@@ -186,3 +186,66 @@ export async function traceCausalChain(client, seedId, relations = ['supersedes'
 
   return Array.from(best.values()).sort((a, b) => b.score - a.score)
 }
+
+/**
+ * Reverse traversal over the local sync mirror — the inbound half of
+ * two-way lineage. The wire protocol has no "who points at X" query, but
+ * the mirror holds every edge this project ever linked, which is exactly
+ * the inbound map for this project's model. Entries carry score 1: the
+ * server's relevance scoring only exists for forward chains.
+ *
+ * @param {string[]} mirrorEdges - edge keys "from\x00type\x00to" from the sync mirror
+ * @param {string} seedId - id of the node to trace inbound from
+ * @param {string[]} relations - relation types to follow
+ * @param {number} maxHops - traversal radius
+ * @returns {Array<{word: string, score: number}>}
+ */
+export function traceInboundFromMirror(mirrorEdges, seedId, relations, maxHops = 2) {
+  if (!Array.isArray(mirrorEdges) || !mirrorEdges.length || !seedId) return []
+  const wanted = new Set(relations.filter(Boolean))
+
+  // Reverse adjacency: target node -> list of { source, type }.
+  const inbound = new Map()
+  for (const key of mirrorEdges) {
+    const [from, type, to] = key.split('\u0000')
+    if (!from || !to) continue
+    if (wanted.size && !wanted.has(type)) continue
+    if (!inbound.has(to)) inbound.set(to, [])
+    inbound.get(to).push(from)
+  }
+
+  const best = new Map() // word -> depth reached (BFS, first reach wins)
+  let frontier = [seedId]
+  best.set(seedId, 0)
+
+  for (let hop = 1; hop <= Math.max(1, maxHops) && frontier.length; hop++) {
+    const nextFrontier = []
+    for (const word of frontier) {
+      for (const source of inbound.get(word) || []) {
+        if (source === seedId || best.has(source)) continue
+        best.set(source, hop)
+        nextFrontier.push(source)
+      }
+    }
+    frontier = nextFrontier
+  }
+
+  best.delete(seedId)
+  return Array.from(best.keys()).map((word) => ({ word, score: 1 }))
+}
+
+/**
+ * Merge forward (server-scored) and inbound (mirror) results into one
+ * ranked list. A word reached both ways keeps the higher, meaningful score.
+ */
+export function mergeLineage(forward, inbound) {
+  const merged = new Map()
+  for (const { word, score } of forward) {
+    merged.set(word, { word, score })
+  }
+  for (const { word, score } of inbound) {
+    const prev = merged.get(word)
+    if (!prev || score > prev.score) merged.set(word, { word, score })
+  }
+  return Array.from(merged.values()).sort((a, b) => b.score - a.score)
+}

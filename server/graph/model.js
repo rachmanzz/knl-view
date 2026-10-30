@@ -77,55 +77,73 @@ export class DirectedGraph {
     return this.incoming.get(id) || []
   }
 
-  // Ekstraksi sub-graf terarah berbasis radius N-hop (Sangat hemat token untuk LLM)
-  extractSubGraph(startId, maxHops = 2) {
-    const visitedNodes = new Set()
+  // Radius-based N-hop sub-graph extraction (cheap enough to feed to an LLM).
+  //
+  // `direction` selects which edges the BFS may walk, mechanically relative
+  // to the edges themselves — never interpreted as cause and effect:
+  //   'out'  — edges leaving the target (what it supersedes / depends_on / affects)
+  //   'in'   — edges entering the target (what references or replaces it)
+  //   'both' — the default; the full neighborhood as before
+  // Each returned node carries `via`: how it connects to the center
+  // ('center', 'in', 'out', or 'in+out' when reachable both ways).
+  extractSubGraph(startId, maxHops = 2, direction = 'both') {
+    const walkOut = direction !== 'in'
+    const walkIn = direction !== 'out'
+    const reachedVia = new Map() // id -> 'in' | 'out' | 'in+out' | 'center'
+    const setVia = (id, via) => {
+      const prev = reachedVia.get(id)
+      if (prev === undefined) reachedVia.set(id, via)
+      else if (prev !== via && prev !== 'center' && via !== 'center') reachedVia.set(id, 'in+out')
+    }
+    setVia(startId, 'center')
     const collectedEdges = []
     const seenEdges = new Set()
     const queue = [{ id: startId, hop: 0 }]
 
     while (queue.length > 0) {
       const { id, hop } = queue.shift()
-      if (visitedNodes.has(id)) continue
-      visitedNodes.add(id)
-
       if (hop >= maxHops) continue
 
-      const outEdges = this.getOutgoingEdges(id)
-      for (const edge of outEdges) {
-        const edgeKey = `${edge.from}->${edge.to}:${edge.type}`
-        if (!seenEdges.has(edgeKey)) {
-          seenEdges.add(edgeKey)
-          collectedEdges.push(edge)
-        }
-        if (!visitedNodes.has(edge.to)) {
-          queue.push({ id: edge.to, hop: hop + 1 })
+      if (walkOut) {
+        for (const edge of this.getOutgoingEdges(id)) {
+          const edgeKey = `${edge.from}->${edge.to}:${edge.type}`
+          if (!seenEdges.has(edgeKey)) {
+            seenEdges.add(edgeKey)
+            collectedEdges.push(edge)
+          }
+          if (!reachedVia.has(edge.to)) {
+            queue.push({ id: edge.to, hop: hop + 1 })
+          }
+          setVia(edge.to, 'out')
         }
       }
 
-      const inEdges = this.getIncomingEdges(id)
-      for (const edge of inEdges) {
-        const edgeKey = `${edge.from}->${edge.to}:${edge.type}`
-        if (!seenEdges.has(edgeKey)) {
-          seenEdges.add(edgeKey)
-          collectedEdges.push(edge)
-        }
-        if (!visitedNodes.has(edge.from)) {
-          queue.push({ id: edge.from, hop: hop + 1 })
+      if (walkIn) {
+        for (const edge of this.getIncomingEdges(id)) {
+          const edgeKey = `${edge.from}->${edge.to}:${edge.type}`
+          if (!seenEdges.has(edgeKey)) {
+            seenEdges.add(edgeKey)
+            collectedEdges.push(edge)
+          }
+          if (!reachedVia.has(edge.from)) {
+            queue.push({ id: edge.from, hop: hop + 1 })
+          }
+          setVia(edge.from, 'in')
         }
       }
     }
 
     const subNodes = []
-    for (const id of visitedNodes) {
+    for (const [id, via] of reachedVia) {
       const node = this.getNode(id)
-      if (node) subNodes.push(node)
+      if (node) subNodes.push({ ...node.toJSON(), via })
     }
 
     return {
       center: startId,
       maxHops,
-      nodes: subNodes.map(n => n.toJSON()),
+      direction,
+      nodes: subNodes,
       edges: collectedEdges.map(e => e.toJSON())
     }
   }

@@ -12,6 +12,8 @@ import {
   createAnchorWireClient,
   syncGraphToAnchorDB,
   traceCausalChain,
+  traceInboundFromMirror,
+  mergeLineage,
   edgeKey,
   edgesOfGraph,
   diffEdges
@@ -55,6 +57,58 @@ describe('Graph Model & Subgraph Extraction', () => {
     assert.ok(nodeIds.includes('DEC-002'))
     assert.ok(nodeIds.includes('features/auth.md'))
     assert.ok(!nodeIds.includes('unrelated.md'))
+  })
+
+  test('extractSubGraph direction=out follows only outgoing edges', () => {
+    const graph = new DirectedGraph()
+    for (const [id, type] of [
+      ['DEC-002', 'decision'], ['DEC-001', 'decision'],
+      ['features/auth.md', 'knowledge'], ['billing.md', 'knowledge']
+    ]) {
+      graph.addNode(new GraphNode({ id, title: id, type }))
+    }
+    graph.addEdge(new GraphEdge({ from: 'DEC-002', to: 'DEC-001', type: 'supersedes' }))
+    graph.addEdge(new GraphEdge({ from: 'DEC-002', to: 'features/auth.md', type: 'affects_knowledge' }))
+    graph.addEdge(new GraphEdge({ from: 'billing.md', to: 'DEC-002', type: 'depends_on' }))
+
+    const sub = graph.extractSubGraph('DEC-002', 1, 'out')
+    assert.equal(sub.direction, 'out')
+    const byId = Object.fromEntries(sub.nodes.map(n => [n.id, n]))
+    assert.deepEqual(Object.keys(byId).sort(), ['DEC-001', 'DEC-002', 'features/auth.md'])
+    assert.equal(byId['DEC-002'].via, 'center')
+    assert.equal(byId['DEC-001'].via, 'out')
+    assert.ok(!byId['billing.md'])
+  })
+
+  test('extractSubGraph direction=in follows only incoming edges', () => {
+    const graph = new DirectedGraph()
+    for (const [id, type] of [
+      ['DEC-002', 'decision'], ['DEC-001', 'decision'],
+      ['features/auth.md', 'knowledge'], ['billing.md', 'knowledge']
+    ]) {
+      graph.addNode(new GraphNode({ id, title: id, type }))
+    }
+    graph.addEdge(new GraphEdge({ from: 'DEC-002', to: 'DEC-001', type: 'supersedes' }))
+    graph.addEdge(new GraphEdge({ from: 'DEC-002', to: 'features/auth.md', type: 'affects_knowledge' }))
+    graph.addEdge(new GraphEdge({ from: 'billing.md', to: 'DEC-002', type: 'depends_on' }))
+
+    const sub = graph.extractSubGraph('DEC-002', 1, 'in')
+    assert.equal(sub.direction, 'in')
+    const byId = Object.fromEntries(sub.nodes.map(n => [n.id, n]))
+    assert.deepEqual(Object.keys(byId).sort(), ['DEC-002', 'billing.md'])
+    assert.equal(byId['billing.md'].via, 'in')
+  })
+
+  test('a node reachable both ways is tagged in+out', () => {
+    const graph = new DirectedGraph()
+    for (const id of ['C', 'A']) graph.addNode(new GraphNode({ id, title: id, type: 'decision' }))
+    graph.addEdge(new GraphEdge({ from: 'A', to: 'C', type: 'supersedes' }))
+    graph.addEdge(new GraphEdge({ from: 'C', to: 'A', type: 'depends_on' }))
+
+    const sub = graph.extractSubGraph('C', 1, 'both')
+    const byId = Object.fromEntries(sub.nodes.map(n => [n.id, n]))
+    assert.equal(byId.A.via, 'in+out')
+    assert.equal(byId.C.via, 'center')
   })
 })
 
@@ -310,6 +364,49 @@ describe('Incremental Sync', () => {
     const result = await syncGraphToAnchorDB(client, makeGraph([['A', 'r', 'B']]), null)
     assert.equal(result.failed, 1)
     assert.equal(result.linked, 0)
+  })
+})
+
+describe('Two-way lineage over the sync mirror', () => {
+  const mirror = [
+    `DEC-002\u0000supersedes\u0000DEC-001`,
+    `DEC-003\u0000supersedes\u0000DEC-002`,
+    `billing.md\u0000depends_on\u0000DEC-002`,
+    `notes.md\u0000mentions\u0000DEC-009`
+  ]
+
+  test('traceInboundFromMirror walks edges backwards, filtered by relation', () => {
+    const inbound = traceInboundFromMirror(mirror, 'DEC-002', ['supersedes', 'depends_on'], 2)
+    assert.deepEqual(inbound.map(e => e.word).sort(), ['DEC-003', 'billing.md'])
+    assert.ok(inbound.every(e => e.score === 1))
+  })
+
+  test('relation filter excludes other types and depth is respected', () => {
+    const onlySupersedes = traceInboundFromMirror(mirror, 'DEC-002', ['supersedes'], 2)
+    assert.deepEqual(onlySupersedes.map(e => e.word), ['DEC-003'])
+
+    // DEC-003 supersedes DEC-002 sits two hops out from DEC-001.
+    const twoHops = traceInboundFromMirror(mirror, 'DEC-001', ['supersedes'], 2)
+    assert.deepEqual(twoHops.map(e => e.word).sort(), ['DEC-002', 'DEC-003'])
+    const oneHop = traceInboundFromMirror(mirror, 'DEC-001', ['supersedes'], 1)
+    assert.deepEqual(oneHop.map(e => e.word), ['DEC-002'])
+  })
+
+  test('unknown seed and empty mirror yield empty results', () => {
+    assert.deepEqual(traceInboundFromMirror(mirror, 'ghost', ['supersedes'], 2), [])
+    assert.deepEqual(traceInboundFromMirror([], 'DEC-002', ['supersedes'], 2), [])
+  })
+
+  test('mergeLineage keeps the higher score when both sides reach a word', () => {
+    const merged = mergeLineage(
+      [{ word: 'a', score: 0.9 }, { word: 'b', score: 0.5 }],
+      [{ word: 'b', score: 1 }, { word: 'c', score: 1 }]
+    )
+    const byWord = Object.fromEntries(merged.map(e => [e.word, e.score]))
+    assert.equal(byWord.a, 0.9)
+    assert.equal(byWord.b, 1) // mirror score wins over the weaker forward one
+    assert.equal(byWord.c, 1)
+    assert.equal(merged[0].word, 'b') // ranked by score only, no source bias
   })
 })
 

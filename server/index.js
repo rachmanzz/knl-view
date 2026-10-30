@@ -4,7 +4,7 @@ import { createReadStream } from 'node:fs'
 import path from 'node:path'
 import { readMap, normalizeMap, decorateNode } from './map.js'
 import { buildGraphFromRoot } from './graph/parser.js'
-import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain } from './graph/anchordb_client.js'
+import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain, traceInboundFromMirror, mergeLineage } from './graph/anchordb_client.js'
 import { anchordbClientOptions, syncStatePath, DEFAULT_RELATIONS } from './config.js'
 
 const MIME = {
@@ -92,6 +92,7 @@ export async function attachAnchorDB(server) {
   }
   state.status = 'connected'
   state.error = null
+  state.model = options.model
   let synced = false
   if (state.config.sync) {
     try {
@@ -163,8 +164,13 @@ async function route(req, res, rootAbs, distAbs, listen) {
       return sendJson(res, 400, { error: 'Parameter "target" atau "id" wajib disertakan.' })
     }
     const hops = parseInt(url.searchParams.get('hops') || '2', 10)
+    const rawDirection = url.searchParams.get('direction')
+    if (rawDirection !== null && !['in', 'out', 'both'].includes(rawDirection)) {
+      return sendJson(res, 400, { error: 'Parameter "direction" must be in, out, or both.' })
+    }
+    const direction = rawDirection || 'both'
     const graph = await buildGraphFromRoot(rootAbs)
-    const subGraph = graph.extractSubGraph(target, Number.isInteger(hops) && hops > 0 ? hops : 2)
+    const subGraph = graph.extractSubGraph(target, Number.isInteger(hops) && hops > 0 ? hops : 2, direction)
     return sendJson(res, 200, subGraph)
   }
   if (pathname === '/api/anchordb/trace') {
@@ -203,17 +209,42 @@ async function handleAnchorTrace(res, state, url) {
     : (state.config.relations?.length ? state.config.relations : DEFAULT_RELATIONS)
   const limit = parseInt(url.searchParams.get('limit') || '20', 10)
   const hops = parseInt(url.searchParams.get('hops') || '2', 10)
+  const rawDirection = url.searchParams.get('direction')
+  if (rawDirection !== null && !['in', 'out', 'both'].includes(rawDirection)) {
+    return sendJson(res, 400, { error: 'Parameter "direction" must be in, out, or both.' })
+  }
+  const direction = rawDirection || 'out'
+
+  // Mechanically directional, never cause-and-effect:
+  //   out  — follow the relations forward from the target (server-scored)
+  //   in   — who references the target: walked from the local sync mirror,
+  //          because the wire protocol has no reverse query
+  //   both — union of the two, best score wins per word
+  const maxHops = Number.isInteger(hops) && hops > 0 ? hops : 2
+  const limitK = Number.isInteger(limit) && limit > 0 ? limit : 20
   try {
-    const chain = await traceCausalChain(
-      state.client,
+    const forward = direction === 'in'
+      ? []
+      : await traceCausalChain(state.client, target, relations, limitK, maxHops)
+    let inbound = []
+    let mirrored = false
+    if (direction !== 'out') {
+      const mirrorEdges = await readSyncState(state.model || state.config.model)
+      mirrored = Array.isArray(mirrorEdges) && mirrorEdges.length > 0
+      inbound = mirrored ? traceInboundFromMirror(mirrorEdges, target, relations, maxHops) : []
+    }
+    const chain = direction === 'out' ? forward : mergeLineage(forward, inbound)
+    return sendJson(res, 200, {
       target,
       relations,
-      Number.isInteger(limit) && limit > 0 ? limit : 20,
-      Number.isInteger(hops) && hops > 0 ? hops : 2
-    )
-    return sendJson(res, 200, { target, relations, limit, hops, chain })
+      limit,
+      hops,
+      direction,
+      mirrored,
+      chain
+    })
   } catch (err) {
-    return sendJson(res, 502, { error: `AnchorDB gagal menelusuri: ${err.message}` })
+    return sendJson(res, 502, { error: `AnchorDB trace failed: ${err.message}` })
   }
 }
 
