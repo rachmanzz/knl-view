@@ -6,6 +6,7 @@ import readline from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import { createKnowledgeServer } from '../server/index.js'
 import { scaffoldBase, seedSkill, ensureGitignore } from '../server/scaffold.js'
+import { buildGraphFromRoot } from '../server/graph/parser.js'
 import { readProjectConfig, readGlobalConfig, projectSlug, resolveSettings } from '../server/config.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -17,6 +18,7 @@ Viewer lokal untuk basis pengetahuan .knowledges.
 Pemakaian:
   knl-view --port 8086 --path=.knowledges
   knl-view --init --path=.knowledges
+  knl-view graph trace --target=<id> [--hops=2] [--path=.knowledges]
 
 Bawaan --port/--path/--host bisa disimpan di knl-config.json di folder
 project (machine-local, gitignored). Flag CLI selalu menimpa config.
@@ -25,6 +27,8 @@ Opsi:
   --port, -p <angka>      Port HTTP (bawaan: 8085, atau knl-config.json)
   --path <folder>         Folder basis pengetahuan (bawaan: .knowledges, atau knl-config.json)
   --host <alamat>         Alamat bind (bawaan: 127.0.0.1, atau knl-config.json)
+  --target <id>           ID simpul target untuk kueri sub-graf
+  --hops <angka>          Radius hop penelusuran graf (bawaan: 2)
   --init                  Bangun basis baru lewat wizard (tidak memulai server)
   --structure <susunan>   Susunan saat --init non-interaktif:
                           standard | empty | custom (bawaan: standard)
@@ -39,17 +43,21 @@ Opsi:
 Contoh:
   knl-view --path=../anchor-connector/.knowledges
   knl-view --port 8086 --path=.knowledges
+  knl-view graph trace --target=README.md --hops=1
+  knl-view graph trace --target=DEC-20261030-135001
   knl-view --init
   knl-view --seed-skill=knl-view --dir=global --yes
 `
 
-let values
+let values, positionals
 try {
-  ({ values } = parseArgs({
+  ({ values, positionals } = parseArgs({
     options: {
       port: { type: 'string', short: 'p' },
       path: { type: 'string' },
       host: { type: 'string' },
+      target: { type: 'string' },
+      hops: { type: 'string', default: '2' },
       init: { type: 'boolean', default: false },
       structure: { type: 'string', default: 'standard' },
       folders: { type: 'string', default: '' },
@@ -59,7 +67,7 @@ try {
       help: { type: 'boolean', short: 'h', default: false },
       version: { type: 'boolean', short: 'v', default: false }
     },
-    allowPositionals: false
+    allowPositionals: true
   }))
 } catch (err) {
   fail(`${err.message}\n\nJalankan "knl-view --help" untuk bantuan.`)
@@ -101,6 +109,27 @@ const settings = resolveSettings({
   global: globalConfig,
   projectName: projectSlug(process.cwd())
 })
+
+const isGraphTrace = (positionals?.[0] === 'graph' && positionals?.[1] === 'trace') || values.target !== undefined
+if (isGraphTrace) {
+  const target = values.target || positionals?.[2]
+  if (!target) {
+    fail('Parameter --target wajib disertakan:\n  knl-view graph trace --target=<id> [--hops=2]')
+  }
+  const root = path.resolve(process.cwd(), settings.path)
+  if (!fs.existsSync(root)) {
+    fail(`Folder tidak ditemukan: ${root}\nCek --path, atau jalankan dari folder project yang punya .knowledges.`)
+  }
+  if (!fs.statSync(root).isDirectory()) {
+    fail(`--path harus folder, bukan berkas: ${root}`)
+  }
+  const hops = parseInt(values.hops || '2', 10)
+  const graph = await buildGraphFromRoot(root)
+  const subGraph = graph.extractSubGraph(target, Number.isInteger(hops) && hops > 0 ? hops : 2)
+  process.stdout.write(JSON.stringify(subGraph, null, 2) + '\n')
+  process.exit(0)
+}
+
 if (values.init || values['seed-skill'] !== undefined) {
   await runSetup()
   process.exit(0)

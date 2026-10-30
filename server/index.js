@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import { createReadStream } from 'node:fs'
 import path from 'node:path'
 import { readMap, normalizeMap, decorateNode } from './map.js'
+import { buildGraphFromRoot } from './graph/parser.js'
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -49,14 +50,27 @@ export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', p
   return server
 }
 
-async function route(req, res, rootAbs, distAbs, listen) {
-  const url = new URL(req.url, 'http://localhost')
+async function route(req, res, rootAbs, distAbs, listen) {  const url = new URL(req.url, 'http://localhost')
   const pathname = url.pathname
 
   if (pathname === '/api/meta') return sendJson(res, 200, await buildMeta(rootAbs, listen))
   if (pathname === '/api/tree') return sendJson(res, 200, await buildTree(rootAbs, '', await loadMapNorm(rootAbs)))
   if (pathname === '/api/doc') return sendDoc(res, rootAbs, url)
   if (pathname === '/api/raw') return sendRaw(res, rootAbs, url)
+  if (pathname === '/api/graph') {
+    const graph = await buildGraphFromRoot(rootAbs)
+    return sendJson(res, 200, graph.toJSON())
+  }
+  if (pathname === '/api/graph/trace') {
+    const target = url.searchParams.get('target') || url.searchParams.get('id')
+    if (!target) {
+      return sendJson(res, 400, { error: 'Parameter "target" atau "id" wajib disertakan.' })
+    }
+    const hops = parseInt(url.searchParams.get('hops') || '2', 10)
+    const graph = await buildGraphFromRoot(rootAbs)
+    const subGraph = graph.extractSubGraph(target, Number.isInteger(hops) && hops > 0 ? hops : 2)
+    return sendJson(res, 200, subGraph)
+  }
   if (pathname.startsWith('/api/')) {
     return sendJson(res, 404, { error: `Endpoint tidak dikenal: ${pathname}` })
   }

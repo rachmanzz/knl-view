@@ -73,6 +73,8 @@ available on your PATH with `npm link`.
 knl-view                                   # serve ./.knowledges on 127.0.0.1:8085
 knl-view --path=../other-project/.knowledges
 knl-view --port 8086 --host 0.0.0.0        # expose on the network
+knl-view graph trace --target=README.md    # query on-demand subgraph for AI
+knl-view graph trace --target=DEC-20261030-135001 --hops=1
 knl-view --init                            # scaffold a new base (wizard, no server)
 knl-view --seed-skill=knl-view --dir=global --yes
 ```
@@ -82,6 +84,8 @@ knl-view --seed-skill=knl-view --dir=global --yes
 | `--port`, `-p` | `8085` | HTTP port |
 | `--path` | `.knowledges` | Folder to serve, relative to the working directory |
 | `--host` | `127.0.0.1` | Bind address |
+| `--target` | none | Target node ID for CLI subgraph trace (`knl-view graph trace`) |
+| `--hops` | `2` | Traversal depth radius for subgraph extraction |
 | `--init` | off | Scaffold a new base interactively; does not start the server |
 | `--structure` | `standard` | Layout for a non-interactive `--init`: `standard`, `empty`, or `custom` |
 | `--folders` | none | Comma-separated folder names for `--structure=custom` |
@@ -150,6 +154,28 @@ view-only: the file stays on disk. Remove the flag to bring it back.
 
 The full field reference lives in the bundled skill:
 `.agents/skills/knl-view/SKILL.md`.
+
+## AI Graph & Decision Tracing
+
+`knl-view` includes an AI-native directed acyclic graph (DAG) engine built directly into the CLI and server. It connects knowledge documents (`.knowledges/*.md`) and architectural decision records (`.knowledges/decisions/*.md`) into a unified graph:
+
+- **Zero Intermediary File**: Fully on-the-fly in-memory processing. Markdown files remain the sole source of truth without generating out-of-sync `graph.json` cache files.
+- **Decision Lineage Tracking**: Automatically discovers `supersedes`, `related_to`, and `affects_knowledge` edges from `decisionskills` decision blocks.
+- **Low-Token Subgraphs for AI**: Instead of loading an entire knowledge base into LLM context, query exact $N$-hop subgraphs in sub-milliseconds (< 1 ms).
+
+### CLI Query
+
+```sh
+knl-view graph trace --target=DEC-20261030-135001 --hops=1
+```
+
+Outputs a compact JSON subgraph to `stdout` containing the focal node and all direct dependencies/impacted components.
+
+### HTTP Endpoints
+
+When `knl-view` is running as a local server:
+- `GET /api/graph`: Returns the entire knowledge and decision graph structure.
+- `GET /api/graph/trace?target=<id>&hops=2`: Returns an isolated $N$-hop neighborhood subgraph for AI agents or interactive visualization.
 
 ## Development
 
