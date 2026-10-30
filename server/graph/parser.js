@@ -143,8 +143,14 @@ export function parseDecisionBlocks(relPath, content) {
   return { nodes, edges }
 }
 
-function parseSingleDecisionBlock(relPath, rawBlock) {
-  const lines = rawBlock.split('\n')
+// Bantu field daftar yang boleh diulang: baris "- references: a" lalu
+// "- references: b" menghasilkan [a, b], bukan hanya [b].
+function appendList(existing, val) {
+  const items = val.split(',').map(s => s.trim().replace(/^`|`$/g, '')).filter(Boolean)
+  return existing.concat(items.filter((item) => !existing.includes(item)))
+}
+
+function parseSingleDecisionBlock(relPath, rawBlock) {  const lines = rawBlock.split('\n')
   let title = 'Untitled Decision'
   let id = null
   let decidedAt = null
@@ -184,9 +190,11 @@ function parseSingleDecisionBlock(relPath, rawBlock) {
       else if (field === 'decided at') decidedAt = val
       else if (field === 'scope') scope = val
       else if (field === 'tags') tags = val.split(',').map(s => s.trim().replace(/^`|`$/g, '')).filter(Boolean)
-      else if (field === 'supersedes') supersedes = val.split(',').map(s => s.trim().replace(/^`|`$/g, '')).filter(Boolean)
-      else if (field === 'related') related = val.split(',').map(s => s.trim().replace(/^`|`$/g, '')).filter(Boolean)
-      else if (field === 'references') references = val.split(',').map(s => s.trim().replace(/^`|`$/g, '')).filter(Boolean)
+      // Field daftar boleh diulang di beberapa baris; baris kedua menambah,
+      // bukan menimpa baris pertama.
+      else if (field === 'supersedes') supersedes = appendList(supersedes, val)
+      else if (field === 'related') related = appendList(related, val)
+      else if (field === 'references') references = appendList(references, val)
       continue
     }
 
