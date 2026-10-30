@@ -10,7 +10,19 @@ import { fileURLToPath } from 'node:url'
 import { createKnowledgeServer, attachAnchorDB } from '../server/index.js'
 import { scaffoldBase, seedSkill, ensureGitignore } from '../server/scaffold.js'
 import { buildGraphFromRoot } from '../server/graph/parser.js'
-import { readProjectConfig, readGlobalConfig, projectSlug, resolveSettings, DEFAULT_MODEL } from '../server/config.js'
+import {
+  claimId,
+  deriveStatus,
+  recordClaim,
+  readClaimsIndex,
+  readConsensusMirror,
+  updateConsensusMirror,
+  inboundConsensus,
+  outboundConsensus,
+  CONSENSUS_RELATIONS
+} from '../server/consensus.js'
+import { readProjectConfig, readGlobalConfig, projectSlug, anchordbClientOptions, resolveModel, resolveSettings, DEFAULT_MODEL } from '../server/config.js'
+import { createAnchorWireClient, mirrorStillValid } from '../server/graph/anchordb_client.js'
 import { readModelRegistry, registerModel, generateModelName, modelRegistryPath } from '../server/models_registry.js'
 import {
   latestRelease,
@@ -34,6 +46,11 @@ const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'u
 // Model roles must be lowercase slugs; used by runModelCommand (called from
 // the top-level flow, so declared before use).
 const MODEL_ROLE_RE = /^[a-z][a-z0-9_-]*$/
+
+// Claim ids are content-addressed: "c-" + 16 hex chars of the statement
+// hash. Used by runConsensusCommand (invoked from the top-level flow, so
+// declared before use).
+const CLAIM_ID_RE = /^c-[0-9a-f]{16}$/
 
 const HELP = `knl-view ${pkg.version}
 Local viewer for the .knowledges knowledge base.
@@ -61,6 +78,12 @@ Commands:
   install anchordb          Install AnchorDB: binary from GitHub Releases on
                             Linux; docker/podman container on other platforms
                             (AnchorDB needs Linux mmap)
+  consensus claim "<text>"  Register a content-addressed claim (c-<hash>)
+  consensus agree <a> <b>   Claim a supports claim b (stored in AnchorDB)
+  consensus contradict <a> <b>  Claim a opposes claim b
+  consensus retract <a> <b> Remove any relation between two claims
+  consensus status <id>     Consensus status of one claim
+  consensus list            Locally known claims with their status
 
 Options:
   --port, -p <number>     HTTP port (default: 8085, or knl-config.json)
@@ -176,6 +199,18 @@ if (positionals?.[0] === 'install') {
   process.exit(0)
 }
 
+// The "consensus" command: agreement/conflict between claims, stored purely
+// in the AnchorDB consensus model (the "consensus" role in the models map).
+const consensusSub = positionals?.[0] === 'consensus' ? positionals?.[1] : null
+if (consensusSub) {
+  try {
+    await runConsensusCommand(consensusSub, positionals?.slice(2), { settings })
+  } catch (err) {
+    fail(`Consensus command failed: ${err.message}`)
+  }
+  process.exit(0)
+}
+
 // Register the project's whole models map to the global registry (updating
 // path/timestamp when this project owns them) and warn about names claimed
 // by other projects. This local registration needs no server connection.
@@ -244,7 +279,14 @@ if (!fs.existsSync(path.join(dist, 'index.html'))) {
   fail(`UI not built yet (${dist}).\nRun first: npm run build`)
 }
 
-const server = createKnowledgeServer({ root, dist, host: settings.host, port, anchordb: settings.anchordb })
+const server = createKnowledgeServer({
+  root,
+  dist,
+  host: settings.host,
+  port,
+  anchordb: settings.anchordb,
+  consensusModel: resolveModel(settings.models, 'consensus')
+})
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
@@ -284,6 +326,11 @@ server.listen(port, settings.host, () => {
             }
           }
           process.stdout.write(`${line})\n`)
+          if (server.knlAnchorDB.consensusClient) {
+            process.stdout.write(`  consensus ready (${server.knlAnchorDB.consensusModel})\n`)
+          } else if (server.knlAnchorDB.consensusError) {
+            process.stdout.write(`  consensus unavailable: ${server.knlAnchorDB.consensusError}\n`)
+          }
         } else {
           process.stdout.write(`  anchordb failed: ${result.reason} (viewer runs local only)\n`)
         }
@@ -590,6 +637,116 @@ async function containerExists(runtime) {
   } catch {
     return false
   }
+}
+
+// Claims and their agrees_with/contradicts relations live in the AnchorDB
+// consensus model; the role must be mapped in the project's models map.
+async function runConsensusCommand(sub, args, { settings }) {
+  if (!settings.anchordb) {
+    fail('Consensus lives in AnchorDB, which is not configured.\n' +
+      'Run "knl-view install anchordb" first (optional layer).')
+  }
+  const consensusModel = settings.models?.consensus
+  if (!consensusModel) {
+    fail('Role "consensus" is not mapped in this project\'s models map.\n' +
+      'Run: knl-view model new consensus')
+  }
+  const base = anchordbClientOptions(settings.anchordb)
+  const client = await createAnchorWireClient({ ...base, model: consensusModel })
+
+  const usage = 'Usage:\n' +
+    '  knl-view consensus claim "<statement>"\n' +
+    '  knl-view consensus agree <claimId> <otherClaimId>\n' +
+    '  knl-view consensus contradict <claimId> <otherClaimId>\n' +
+    '  knl-view consensus retract <claimId> <otherClaimId>\n' +
+    '  knl-view consensus status <claimId>\n' +
+    '  knl-view consensus list'
+
+  const validClaimArg = (value) => {
+    if (!CLAIM_ID_RE.test(value || '')) {
+      fail(`Not a claim id: "${value || '(empty)'}".\nClaim ids look like c-a1b2c3d4e5f6a1b2; create one with:\n  knl-view consensus claim "<statement>"`)
+    }
+    return value
+  }
+
+  const link = async (type, args) => {
+    const [from, to] = args
+    validClaimArg(from)
+    validClaimArg(to)
+    if (from === to) fail('A claim cannot agree with or contradict itself.')
+    await client.link(from, type, to, 1.0)
+    const { error } = await updateConsensusMirror(consensusModel, { op: 'link', from, type, to })
+    if (error) process.stderr.write(`knl-view: mirror not updated (${error})\n`)
+    process.stdout.write(`${type}: ${from} -> ${to}\n`)
+  }
+
+  if (sub === 'claim') {
+    const text = (args || []).join(' ').trim()
+    if (!text) fail(`A claim needs a statement.\n${usage}`)
+    const { id, error } = await recordClaim(consensusModel, text)
+    if (error) process.stderr.write(`knl-view: claim index not updated (${error})\n`)
+    process.stdout.write(`claim ${id}\n  "${text}"\n  (relations are created by agree/contradict; status: knl-view consensus status ${id})\n`)
+    return
+  }
+
+  if (sub === 'agree') return link('agrees_with', args)
+  if (sub === 'contradict') return link('contradicts', args)
+
+  if (sub === 'retract') {
+    const [from, to] = args
+    validClaimArg(from)
+    validClaimArg(to)
+    for (const type of CONSENSUS_RELATIONS) {
+      // Unlinking a missing edge is not an error: retract is idempotent.
+      await client.unlink(from, type, to).catch(() => {})
+    }
+    const { error } = await updateConsensusMirror(consensusModel, { op: 'unlink', from, type: '*', to })
+    if (error) process.stderr.write(`knl-view: mirror not updated (${error})\n`)
+    process.stdout.write(`retracted: ${from} -/-> ${to}\n`)
+    return
+  }
+
+  if (sub === 'status' || sub === 'list') {
+    const { claims, error } = await readClaimsIndex(consensusModel)
+    if (error) process.stderr.write(`knl-view: claim index ignored (${error})\n`)
+
+    const statusOne = async (id) => {
+      const mirrorEdges = await readConsensusMirror(consensusModel)
+      // null = no mirror file at all; an existing-but-empty mirror is still
+      // valid knowledge (everything was retracted). Non-empty mirrors are
+      // probed against the server first: it may have been wiped or replaced
+      // since the mirror was written; distrust it the same way the
+      // knowledges sync does.
+      let mirrored = Array.isArray(mirrorEdges)
+      if (mirrored && mirrorEdges.length > 0) {
+        mirrored = await mirrorStillValid(client, mirrorEdges).catch(() => false)
+      }
+      const usable = mirrored ? mirrorEdges : null
+      const inbound = inboundConsensus(usable || [], id)
+      const stance = outboundConsensus(usable || [], id)
+      const status = deriveStatus(inbound.supporters, inbound.objectors)
+      const text = claims[id]?.text ? ` "${claims[id].text}"` : ''
+      process.stdout.write(`${id}${text}\n  status: ${status}${mirrored ? '' : ' (no valid local mirror; relation data unavailable)'}\n`)
+      process.stdout.write(`  supporters: ${inbound.supporters.join(', ') || '(none)'}\n`)
+      process.stdout.write(`  objectors: ${inbound.objectors.join(', ') || '(none)'}\n`)
+      process.stdout.write(`  stance: agrees with ${stance.agrees.join(', ') || '(none)'}; contradicts ${stance.contradicts.join(', ') || '(none)'}\n`)
+    }
+
+    if (sub === 'status') {
+      await statusOne(validClaimArg(args?.[0]))
+      return
+    }
+
+    const ids = Object.keys(claims)
+    if (!ids.length) {
+      process.stdout.write('No claims known locally. Create one:\n  knl-view consensus claim "<statement>"\n')
+      return
+    }
+    for (const id of ids) await statusOne(id)
+    return
+  }
+
+  fail(`Unknown consensus subcommand: ${sub || '(empty)'}\n${usage}`)
 }
 
 function fail(message) {

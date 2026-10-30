@@ -74,7 +74,7 @@ function isEdgeNotFound(err) {
  * link is always safe; what is dangerous is trusting a mirror against an
  * empty server.
  */
-async function mirrorStillValid(client, previousEdges) {
+export async function mirrorStillValid(client, previousEdges) {
   if (!Array.isArray(previousEdges) || previousEdges.length === 0) return Boolean(previousEdges)
   const [from, type, to] = previousEdges[0].split('\u0000')
   try {

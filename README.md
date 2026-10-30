@@ -265,6 +265,39 @@ is exactly the inbound map for this project's model. Mirror results
 carry score 1 and the response reports `mirrored: true`/`false` so
 consumers know which half came from where.
 
+### Consensus (claims)
+
+A second AnchorDB model, the `consensus` role in the project's models map,
+holds agreement and conflict between *claims*: short statements that are
+content-addressed (`c-` + 16 hex chars of the statement's hash), so the same
+text is the same claim on every machine. Claims relate only to other claims,
+through two fixed relation types: `agrees_with` and `contradicts`. The
+consensus structure lives purely in AnchorDB; the local artifacts (claim
+index in `~/.knlview/claims/`, edge mirror in `~/.knlview/sync-state/`) are
+caches that degrade convenience, never the data.
+
+A claim's status is derived from who points at it: any incoming `contradicts`
+makes it `disputed`, otherwise any incoming `agrees_with` makes it
+`consensus`, otherwise it is `uncontested`.
+
+```sh
+knl-view consensus claim "We use bcrypt for password hashing"
+knl-view consensus agree c-a1b2c3d4e5f6a1b2 c-437ff9f10f83edde
+knl-view consensus contradict c-a1b2c3d4e5f6a1b2 c-437ff9f10f83edde
+knl-view consensus retract c-a1b2c3d4e5f6a1b2 c-437ff9f10f83edde
+knl-view consensus status c-437ff9f10f83edde
+knl-view consensus list
+```
+
+Mutations are CLI-only on purpose: one write path, one mirror kept honest.
+The read-only HTTP endpoint answers "is this claim settled?":
+
+`GET /api/consensus?target=<claimId>` returns the claim's `status`,
+`supporters`, `objectors`, its own `stance`, `mirrored` (whether a valid
+local mirror backs the inbound half), and a `statements` map of the
+claim texts involved. Returns `503` when AnchorDB is off or the
+`consensus` role is not mapped.
+
 ### CLI Query
 
 ```sh
@@ -279,6 +312,7 @@ When `knl-view` is running as a local server:
 - `GET /api/graph`: Returns the entire knowledge and decision graph structure.
 - `GET /api/graph/trace?target=<id>&hops=2`: Returns an isolated $N$-hop neighborhood subgraph for AI agents or interactive visualization.
 - `GET /api/anchordb/trace?target=<id>&hops=2`: Returns a causal chain traced on the AnchorDB server (requires the global `anchordb` config block). Returns `503` when AnchorDB is off or unreachable.
+- `GET /api/consensus?target=<claimId>`: Read-only consensus status for one claim (requires AnchorDB and a mapped `consensus` role). Returns `503` when AnchorDB is off or the role is unmapped, `400` without a target.
 
 ## Development
 

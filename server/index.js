@@ -4,7 +4,14 @@ import { createReadStream } from 'node:fs'
 import path from 'node:path'
 import { readMap, normalizeMap, decorateNode } from './map.js'
 import { buildGraphFromRoot } from './graph/parser.js'
-import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain, traceInboundFromMirror, mergeLineage } from './graph/anchordb_client.js'
+import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain, traceInboundFromMirror, mergeLineage, mirrorStillValid } from './graph/anchordb_client.js'
+import {
+  deriveStatus,
+  readClaimsIndex,
+  readConsensusMirror,
+  inboundConsensus,
+  outboundConsensus
+} from './consensus.js'
 import { anchordbClientOptions, syncStatePath, DEFAULT_RELATIONS } from './config.js'
 
 const MIME = {
@@ -35,7 +42,7 @@ const MD_EXTS = new Set(['md', 'markdown', 'prd'])
 const MAX_DOC_BYTES = 8 * 1024 * 1024
 const TITLE_READ_BYTES = 8192
 
-export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085, anchordb = null }) {
+export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085, anchordb = null, consensusModel = null }) {
   const rootAbs = path.resolve(root)
   const distAbs = dist ? path.resolve(dist) : null
   // Live AnchorDB connection status lives here, not a snapshot: attachAnchorDB
@@ -45,7 +52,10 @@ export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', p
     client: null,
     status: anchordb ? 'connecting' : 'off',
     error: null,
-    syncedAt: null
+    syncedAt: null,
+    consensusModel,
+    consensusClient: null,
+    consensusError: null
   }
 
   const server = http.createServer((req, res) => {
@@ -93,6 +103,18 @@ export async function attachAnchorDB(server) {
   state.status = 'connected'
   state.error = null
   state.model = options.model
+
+  // A second client for the consensus model, when the project maps that
+  // role. Best effort: a failed consensus connection only disables
+  // consensus endpoints, never the main graph sync.
+  if (state.consensusModel) {
+    try {
+      state.consensusClient = await createAnchorWireClient({ ...options, model: state.consensusModel })
+    } catch (err) {
+      state.consensusClient = null
+      state.consensusError = err.message
+    }
+  }
   let synced = false
   if (state.config.sync) {
     try {
@@ -176,6 +198,9 @@ async function route(req, res, rootAbs, distAbs, listen) {
   if (pathname === '/api/anchordb/trace') {
     return handleAnchorTrace(res, listen.anchordb, url)
   }
+  if (pathname === '/api/consensus') {
+    return handleConsensus(res, listen.anchordb, url)
+  }
   if (pathname.startsWith('/api/')) {
     return sendJson(res, 404, { error: `Unknown endpoint: ${pathname}` })
   }
@@ -246,6 +271,63 @@ async function handleAnchorTrace(res, state, url) {
     })
   } catch (err) {
     return sendJson(res, 502, { error: `AnchorDB trace failed: ${err.message}` })
+  }
+}
+
+// Read-only consensus status over HTTP. Mutations stay in the CLI on
+// purpose: one write path, one mirror to keep honest.
+async function handleConsensus(res, state, url) {
+  if (!state?.config) {
+    return sendJson(res, 503, { error: 'AnchorDB is off. Add the "anchordb" block to the global knl-config.json.' })
+  }
+  if (state.status !== 'connected' || !state.client) {
+    return sendJson(res, 503, {
+      error: `AnchorDB is not connected yet (status: ${state.status}).`,
+      detail: state.error || null
+    })
+  }
+  if (!state.consensusModel) {
+    return sendJson(res, 503, {
+      error: 'Role "consensus" is not mapped in this project\'s models map.',
+      hint: 'knl-view model new consensus'
+    })
+  }
+  const target = url.searchParams.get('target') || url.searchParams.get('id')
+  if (!target) {
+    return sendJson(res, 400, { error: 'Parameter "target" or "id" is required.' })
+  }
+  try {
+    let probeClient = state.consensusClient
+    if (!probeClient) {
+      return sendJson(res, 503, {
+        error: 'Consensus model is not reachable.',
+        detail: state.consensusError || 'no consensus client'
+      })
+    }
+    const mirrorEdges = await readConsensusMirror(state.consensusModel)
+    let mirrored = Array.isArray(mirrorEdges)
+    if (mirrored && mirrorEdges.length > 0) {
+      mirrored = await mirrorStillValid(probeClient, mirrorEdges).catch(() => false)
+    }
+    const usable = mirrored ? mirrorEdges : []
+    const inbound = inboundConsensus(usable, target)
+    const stance = outboundConsensus(usable, target)
+    const { claims } = await readClaimsIndex(state.consensusModel)
+    return sendJson(res, 200, {
+      target,
+      status: deriveStatus(inbound.supporters, inbound.objectors),
+      supporters: inbound.supporters,
+      objectors: inbound.objectors,
+      stance,
+      mirrored,
+      statements: Object.fromEntries(
+        [target, ...inbound.supporters, ...inbound.objectors]
+          .filter((id) => claims[id]?.text)
+          .map((id) => [id, claims[id].text])
+      )
+    })
+  } catch (err) {
+    return sendJson(res, 502, { error: `Consensus status failed: ${err.message}` })
   }
 }
 

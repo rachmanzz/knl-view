@@ -237,6 +237,18 @@ Each node in the result carries \`via\` (\`center\`, \`in\`, \`out\`,
 walked backwards from the local sync mirror and reported with
 \`mirrored: true\`.
 
+Consensus (claims): a second AnchorDB model — the \`consensus\` role in
+the models map — holds agreement and conflict between claims only (never
+decisions or files). Claims are content-addressed:
+\`knl-view consensus claim "<statement>"\` prints the id (\`c-\` + 16 hex
+chars of the statement hash); the same text is the same claim everywhere.
+Relations: \`agree\`, \`contradict\`, \`retract\` — all take two claim
+ids. \`status <id>\` derives: any incoming \`contradicts\` → \`disputed\`,
+else incoming \`agrees_with\` → \`consensus\`, else \`uncontested\`.
+\`list\` shows every locally known claim. Mutations are CLI-only;
+\`GET /api/consensus?target=<claimId>\` is read-only. Requires AnchorDB
+plus a mapped \`consensus\` role.
+
 ## Rules
 
 - Never move or delete files to satisfy the map. Either add the file or
