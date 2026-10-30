@@ -3,12 +3,30 @@ import { parseArgs } from 'node:util'
 import path from 'node:path'
 import fs from 'node:fs'
 import readline from 'node:readline/promises'
+import { execFile, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { createKnowledgeServer, attachAnchorDB } from '../server/index.js'
 import { scaffoldBase, seedSkill, ensureGitignore } from '../server/scaffold.js'
 import { buildGraphFromRoot } from '../server/graph/parser.js'
 import { readProjectConfig, readGlobalConfig, projectSlug, resolveSettings, DEFAULT_MODEL } from '../server/config.js'
 import { readModelRegistry, registerModel, generateModelName, modelRegistryPath } from '../server/models_registry.js'
+import {
+  latestRelease,
+  releaseAssetName,
+  generateToken,
+  downloadFile,
+  verifySha256,
+  mergeGlobalAnchordb,
+  detectContainerRuntime,
+  GHCR_IMAGE,
+  HTTP_PORT_DEFAULT,
+  WIRE_PORT_DEFAULT,
+  CONTAINER_NAME
+} from '../server/install.js'
+
+const exec = promisify(execFile)
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'))
@@ -38,6 +56,9 @@ Perintah:
   model new <peran>         Buat nama model acak untuk peran (mis. knowledges),
                             tulis ke knl-config.json dan registry global
   model check               Periksa peta model project ini dan registry global
+  install anchordb          Pasang AnchorDB: binary dari GitHub Releases di
+                            Linux; container docker/podman di platform lain
+                            (AnchorDB butuh mmap Linux)
 
 Opsi:
   --port, -p <angka>      Port HTTP (bawaan: 8085, atau knl-config.json)
@@ -45,6 +66,8 @@ Opsi:
   --host <alamat>         Alamat bind (bawaan: 127.0.0.1, atau knl-config.json)
   --anchordb <url>        URL AnchorWire untuk sesi ini, menimpa blok
                           "anchordb" di knl-config.json
+  --method <metode>       Metode "install anchordb": binary | container
+  --token <teks>          Token auth untuk "install anchordb" (bawaan: acak)
   --target <id>           ID simpul target untuk kueri sub-graf
   --hops <angka>          Radius hop penelusuran graf (bawaan: 2)
   --init                  Bangun basis baru lewat wizard (tidak memulai server)
@@ -75,6 +98,8 @@ try {
       path: { type: 'string' },
       host: { type: 'string' },
       anchordb: { type: 'string' },
+      method: { type: 'string' },
+      token: { type: 'string' },
       target: { type: 'string' },
       hops: { type: 'string', default: '2' },
       init: { type: 'boolean', default: false },
@@ -136,6 +161,13 @@ if (values.anchordb !== undefined && !settings.anchordb) {
 const modelCommand = positionals?.[0] === 'model' ? positionals?.[1] : null
 if (modelCommand) {
   await runModelCommand(modelCommand, positionals?.[2], { projectConfig, settings })
+  process.exit(0)
+}
+
+// Perintah "install": pasang AnchorDB (binary di Linux, container di
+// platform lain) lalu tulis blok anchordb ke config global.
+if (positionals?.[0] === 'install') {
+  await runInstallCommand(positionals?.[1], { values })
   process.exit(0)
 }
 
@@ -356,6 +388,195 @@ async function askYesNo(rl, question, fallback) {
   const answer = (await ask(rl, `${question} (y/t) [bawaan: ${fallback ? 'y' : 't'}]: `, '')).toLowerCase()
   if (!answer) return fallback
   return answer === 'y' || answer === 'ya'
+}
+
+// Perintah "install anchordb". Linux: binary dari GitHub Releases
+// (diverifikasi SHA256SUMS.txt). Platform lain: container ghcr.io —
+// AnchorDB butuh mmap Linux, jadi di macOS/Windows dia jalan di dalam
+// container Linux via docker/podman. Setelah terpasang, blok "anchordb"
+// ditulis ke config global supaya semua project langsung bisa connect.
+async function runInstallCommand(target, { values }) {
+  if (target !== 'anchordb') {
+    fail(`Target install tidak dikenal: ${target || '(kosong)'}\nYang tersedia: knl-view install anchordb`)
+  }
+  const isLinux = process.platform === 'linux'
+  const interactive = Boolean(process.stdin.isTTY) && !values.yes
+  const rl = interactive ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null
+
+  let method = values.method
+  if (!method) {
+    if (isLinux) {
+      method = interactive
+        ? await askChoice(rl, 'Metode instalasi AnchorDB?', [
+            ['binary', 'Binary dari GitHub Releases (native Linux)'],
+            ['container', 'Container docker/podman (ghcr.io)']
+          ], 'binary')
+        : 'binary'
+    } else {
+      method = 'container'
+      process.stdout.write('AnchorDB butuh mmap Linux; di platform ini dipasang sebagai container Linux.\n')
+    }
+  }
+  if (!['binary', 'container'].includes(method)) {
+    fail(`--method harus binary atau container, dapat "${method}".`)
+  }
+
+  const token = values.token || generateToken()
+  const home = process.env.HOME || process.cwd()
+  // fs di modul ini API callback; langkah installer butuh versi promise.
+  const fsp = fs.promises
+  let started = false
+
+  try {
+    if (method === 'binary') {
+      if (!isLinux) {
+        fail('Metode binary hanya untuk Linux (AnchorDB butuh mmap Linux).\nGunakan --method=container.')
+      }
+      const { version } = await latestRelease()
+      const asset = releaseAssetName(version)
+      const workdir = path.join(os.tmpdir(), `knlview-install-${Date.now()}`)
+      await fsp.mkdir(workdir, { recursive: true })
+      const binDir = path.join(home, '.knlview', 'bin')
+
+      process.stdout.write(`Mengunduh ${asset} (v${version}) ...\n`)
+      const archive = path.join(workdir, asset)
+      await downloadFile(`https://github.com/rachmanzz/anchordb/releases/download/v${version}/${asset}`, archive)
+      const sums = path.join(workdir, 'SHA256SUMS.txt')
+      await downloadFile(`https://github.com/rachmanzz/anchordb/releases/download/v${version}/SHA256SUMS.txt`, sums)
+      await verifySha256(archive, await fsp.readFile(sums, 'utf8'))
+      process.stdout.write('  SHA256 cocok dengan SHA256SUMS.txt\n')
+
+      process.stdout.write('Mengekstrak ...\n')
+      await exec('tar', ['-xzf', archive, '-C', workdir])
+      await fsp.mkdir(binDir, { recursive: true })
+      for (const bin of ['anchordb-server', 'anchordb']) {
+        const target2 = path.join(binDir, bin)
+        await fsp.copyFile(path.join(workdir, bin), target2)
+        await fsp.chmod(target2, 0o755)
+      }
+      process.stdout.write(`  terpasang di ${binDir}\n`)
+
+      const runNow = interactive
+        ? await askYesNo(rl, 'Jalankan server AnchorDB sekarang?', true)
+        : true
+      if (runNow) {
+        const dataDir = path.join(home, '.knlview', 'anchordb-data')
+        await fsp.mkdir(dataDir, { recursive: true })
+        const logFd = await fsp.open(path.join(home, '.knlview', 'anchordb.log'), 'a')
+        const child = spawn(path.join(binDir, 'anchordb-server'), [], {
+          env: {
+            ...process.env,
+            ANCHORDB_AUTH_TOKEN: token,
+            ANCHORDB_DATA_DIR: dataDir,
+            ANCHORDB_PORT: String(HTTP_PORT_DEFAULT),
+            ANCHORDB_WIRE_PORT: String(WIRE_PORT_DEFAULT)
+          },
+          detached: true,
+          stdio: ['ignore', logFd.fd, logFd.fd]
+        })
+        child.unref()
+        logFd.close()
+        await waitAnchorHealth()
+        started = true
+        process.stdout.write(`  server jalan (log: ${path.join(home, '.knlview', 'anchordb.log')})\n`)
+      }
+    } else {
+      const runtime = await detectContainerRuntime(async (cmd) => {
+        try { await exec(cmd, ['--version']); return true } catch { return false }
+      })
+      if (!runtime) {
+        fail('docker/podman tidak ditemukan.\nPasang dulu salah satunya: Docker Desktop (macOS/Windows) atau podman.')
+      }
+      const { version } = await latestRelease()
+      const image = `${GHCR_IMAGE}:${version}`
+      process.stdout.write(`Menarik ${image} via ${runtime} ...\n`)
+      await exec(runtime, ['pull', image])
+      process.stdout.write('  image siap\n')
+
+      // Nama container tetap: kalau sudah ada, pemakainya harus sadar —
+      // dihapus manual supaya data lama tidak hilang tanpa sengaja.
+      if (await containerExists(runtime)) {
+        fail(`Container "${CONTAINER_NAME}" sudah ada.\nHapus dulu bila memang mau dipasang ulang: ${runtime} rm -f ${CONTAINER_NAME}`)
+      }
+
+      const dataDir = path.join(home, '.knlview', 'anchordb-data')
+      await fsp.mkdir(dataDir, { recursive: true })
+      await fsp.chmod(dataDir, 0o777)
+      const baseArgs = ['run', '-d', '--name', CONTAINER_NAME,
+        '-p', `${HTTP_PORT_DEFAULT}:${HTTP_PORT_DEFAULT}`,
+        '-p', `${WIRE_PORT_DEFAULT}:${WIRE_PORT_DEFAULT}`,
+        '-e', `ANCHORDB_AUTH_TOKEN=${token}`,
+        '-e', 'ANCHORDB_DATA_DIR=/data']
+      // Image jalan sebagai user "anchordb" (bukan root). Rootless podman
+      // memetakan uid itu ke uid host lain, lalu file data milik host user
+      // jadi tak terbaca ("permission denied"). keep-id menjalankan proses
+      // container dengan uid host user — data binary dan container bisa
+      // berbagi folder. Docker (macOS/Windows) berjalan di VM dan bind
+      // mount-nya tidak terdampak, jadi tanpa flag ini.
+      if (runtime === 'podman') baseArgs.push('--userns=keep-id')
+      process.stdout.write(`Menjalankan container ...\n`)
+      try {
+        await exec(runtime, [...baseArgs, '-v', `${dataDir}:/data:Z`, image])
+      } catch {
+        // Rootless/sandbox kadang menolak volume bind; tanpa volume data
+        // ikut hilang saat container dihapus — disebut apa adanya.
+        process.stdout.write('  volume tidak bisa dipasang; data efemeral di dalam container\n')
+        await exec(runtime, [...baseArgs, image])
+      }
+      await waitAnchorHealth()
+      started = true
+    }
+  } catch (err) {
+    fail(`Instalasi gagal: ${err.message || err}`)
+  }
+
+  const before = await mergeGlobalAnchordb(home, {
+    url: `wire://127.0.0.1:${WIRE_PORT_DEFAULT}`,
+    token,
+    sync: true
+  })
+  if (before) {
+    process.stdout.write('  (blok anchordb lama di config global ditimpa; token baru diterapkan)\n')
+  }
+
+  process.stdout.write(
+    `\nAnchorDB siap.\n` +
+      `  HTTP   http://127.0.0.1:${HTTP_PORT_DEFAULT}/health${started ? ' (sudah respons)' : ''}\n` +
+      `  wire   wire://127.0.0.1:${WIRE_PORT_DEFAULT}\n` +
+      `  token  ${token.slice(0, 8)}… (lengkap di ~/.knlview/knl-config.json)\n` +
+      `  config ${home}/.knlview/knl-config.json\n\n` +
+      `Langkah berikutnya:\n` +
+      `  1. Di project kamu: knl-view model new knowledges\n` +
+      `  2. knl-view — baris "anchordb terhubung" muncul saat graf tersinkron\n`
+  )
+  if (!started) {
+    process.stdout.write(
+      `  3. Server belum dijalankan; nyalakan manual:\n` +
+        `     ~/.knlview/bin/anchordb-server  (env: ANCHORDB_AUTH_TOKEN, ANCHORDB_DATA_DIR)\n`
+    )
+  }
+}
+
+async function waitAnchorHealth(attempts = 30) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${HTTP_PORT_DEFAULT}/health`)
+      if (res.ok) return
+    } catch {
+      // belum siap, coba lagi
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  throw new Error(`server tidak merespons http://127.0.0.1:${HTTP_PORT_DEFAULT}/health dalam ${attempts / 2} detik — cek log anchordb`)
+}
+
+async function containerExists(runtime) {
+  try {
+    await exec(runtime, ['container', 'inspect', CONTAINER_NAME])
+    return true
+  } catch {
+    return false
+  }
 }
 
 function fail(message) {

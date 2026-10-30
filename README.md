@@ -144,6 +144,25 @@ The global registry `~/.knlview/models.json` records every name's owner
 project whose map has no entry for a role runs fully local: AnchorDB is
 touched only once the role is mapped.
 
+## Installing AnchorDB
+
+`knl-view install anchordb` installs AnchorDB and writes the `anchordb`
+block into the global config:
+
+- **Linux**: downloads the native binary from
+  [GitHub Releases](https://github.com/rachmanzz/anchordb/releases),
+  verifies it against the release's `SHA256SUMS.txt`, installs to
+  `~/.knlview/bin/`, and starts `anchordb-server` detached (logs in
+  `~/.knlview/anchordb.log`, data in `~/.knlview/anchordb-data`).
+- **Other platforms**: AnchorDB needs Linux `mmap`, so it runs as a Linux
+  container from `ghcr.io/rachmanzz/anchordb` via docker or podman — the
+  command refuses to continue if neither is installed.
+
+Non-interactive (CI/scripts): add `--yes`. Explicit method: `--method=binary`
+or `--method=container`. Fixed token instead of a random one: `--token=...`.
+If a container named `anchordb-knlview` already exists, the installer stops
+instead of removing it — data must not disappear by accident.
+
 ## How a base is read
 
 A base is an ordinary folder:
