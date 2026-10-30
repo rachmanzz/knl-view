@@ -29,6 +29,17 @@ export function globalConfigPath(home = process.env.HOME) {
 }
 
 /**
+ * Lokasi mirror edge yang terakhir tersinkron untuk satu model:
+ * ~/.knlview/sync-state/<model>.json. Sync inkremental membandingkan
+ * graf lokal dengan mirror ini, bukan dengan isi server (server tidak
+ * menyediakan enumerasi edge via wire protocol).
+ */
+export function syncStatePath(model, home = process.env.HOME) {
+  const safe = String(model || 'model').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'model'
+  return path.join(home || '', GLOBAL_CONFIG_DIR, 'sync-state', `${safe}.json`)
+}
+
+/**
  * Baca config global ~/.knlview/knl-config.json (blok anchordb).
  * @returns {Promise<{config: object|null, error: string|null}>}
  */

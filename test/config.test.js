@@ -7,6 +7,7 @@ import {
   readProjectConfig,
   readGlobalConfig,
   globalConfigPath,
+  syncStatePath,
   normalizeProjectConfig,
   normalizeGlobalConfig,
   normalizeAnchordb,
@@ -93,6 +94,23 @@ describe('readGlobalConfig', () => {
     })
     const { config } = await readGlobalConfig(home)
     assert.deepEqual(config, { anchordb: { url: 'wire://h:1', sync: true } })
+  })
+})
+
+describe('syncStatePath', () => {
+  test('lives under ~/.knlview/sync-state and sanitizes the model name', () => {
+    assert.equal(
+      syncStatePath('knl-e2e-knowledges', '/home/u'),
+      path.join('/home/u', '.knlview', 'sync-state', 'knl-e2e-knowledges.json')
+    )
+    assert.equal(
+      syncStatePath('Weird Model/Name!', '/home/u'),
+      path.join('/home/u', '.knlview', 'sync-state', 'weird-model-name.json')
+    )
+  })
+
+  test('empty model falls back to a stable filename', () => {
+    assert.equal(syncStatePath('', '/home/u'), path.join('/home/u', '.knlview', 'sync-state', 'model.json'))
   })
 })
 

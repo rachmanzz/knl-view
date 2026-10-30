@@ -5,7 +5,7 @@ import path from 'node:path'
 import { readMap, normalizeMap, decorateNode } from './map.js'
 import { buildGraphFromRoot } from './graph/parser.js'
 import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain } from './graph/anchordb_client.js'
-import { anchordbClientOptions, DEFAULT_RELATIONS } from './config.js'
+import { anchordbClientOptions, syncStatePath, DEFAULT_RELATIONS } from './config.js'
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -91,7 +91,13 @@ export async function attachAnchorDB(server) {
   if (state.config.sync) {
     try {
       const graph = await buildGraphFromRoot(server.knlRoot)
-      const result = await syncGraphToAnchorDB(state.client, graph)
+      const previous = await readSyncState(options.model)
+      const result = await syncGraphToAnchorDB(state.client, graph, previous)
+      if (result.failed === 0) {
+        // Mirror hanya ditulis saat sync bersih, supaya bagian yang gagal
+        // diulang otomatis di start berikutnya.
+        await writeSyncState(options.model, result.edges)
+      }
       state.syncedAt = Date.now()
       state.lastSync = result
       synced = true
@@ -105,7 +111,32 @@ export async function attachAnchorDB(server) {
     model: options.model,
     synced,
     linked: state.lastSync?.linked ?? 0,
+    unlinked: state.lastSync?.unlinked ?? 0,
+    kept: state.lastSync?.kept ?? 0,
     failed: state.lastSync?.failed ?? 0
+  }
+}
+
+// Mirror edge hasil sync terakhir: ~/.knlview/sync-state/<model>.json.
+// File rusak/hilang diperlakukan sebagai "belum pernah sync" (full sync),
+// bukan error — mirror ini murni optimasi, bukan sumber kebenaran.
+async function readSyncState(model) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(syncStatePath(model), 'utf8'))
+    if (parsed?.model !== model || !Array.isArray(parsed.edges)) return null
+    return parsed.edges
+  } catch {
+    return null
+  }
+}
+
+async function writeSyncState(model, edges) {
+  try {
+    const file = syncStatePath(model)
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, JSON.stringify({ model, syncedAt: new Date().toISOString(), edges }), 'utf8')
+  } catch {
+    // Mirror gagal ditulis: sync tetap sah, hanya inkrementalitas hilang.
   }
 }
 

@@ -185,7 +185,15 @@ server.listen(port, settings.host, () => {
     attachAnchorDB(server).then((result) => {
       if (result.ok) {
         let line = `  anchordb terhubung (${result.model}`
-        if (result.synced) line += result.failed ? `, sync ${result.linked} edge, ${result.failed} gagal` : ', graf tersinkron'
+        if (result.synced) {
+          if (result.failed) {
+            line += `, sync ${result.linked}+${result.unlinked} edge, ${result.failed} gagal (diulang saat start berikutnya)`
+          } else if (result.linked || result.unlinked) {
+            line += `, sync +${result.linked} -${result.unlinked} (${result.kept} edge tetap)`
+          } else {
+            line += `, graf sudah sinkron (${result.kept} edge)`
+          }
+        }
         process.stdout.write(`${line})\n`)
       } else {
         process.stdout.write(`  anchordb gagal: ${result.reason} (viewer jalan lokal saja)\n`)

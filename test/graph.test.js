@@ -8,7 +8,14 @@ import { fileURLToPath } from 'node:url'
 import { GraphNode, GraphEdge, DirectedGraph } from '../server/graph/model.js'
 import { parseKnowledgeContent, parseDecisionBlocks, buildGraphFromRoot } from '../server/graph/parser.js'
 import { createKnowledgeServer } from '../server/index.js'
-import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain } from '../server/graph/anchordb_client.js'
+import {
+  createAnchorWireClient,
+  syncGraphToAnchorDB,
+  traceCausalChain,
+  edgeKey,
+  edgesOfGraph,
+  diffEdges
+} from '../server/graph/anchordb_client.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(here, '..')
@@ -181,6 +188,128 @@ describe('CLI Graph Trace (Zero-File Intermediary)', () => {
     // Pastikan tidak ada berkas perantara graph.json yang tercipta di disk
     const outGraph = path.join(knlDir, 'graph.json')
     assert.ok(!fs.existsSync(outGraph))
+  })
+})
+
+describe('Incremental Sync', () => {
+  const E = (from, type, to) => edgeKey(from, type, to)
+
+  function makeGraph(edges) {
+    return {
+      edges: edges.map(([from, type, to]) => ({ from, type, to }))
+    }
+  }
+
+  function fakeClient(existing = new Set()) {
+    const calls = { linked: [], unlinked: [] }
+    return {
+      calls,
+      existing,
+      async link(from, type, to) {
+        calls.linked.push(E(from, type, to))
+        existing.add(E(from, type, to))
+      },
+      async unlink(from, type, to) {
+        const key = E(from, type, to)
+        if (!existing.has(key)) {
+          throw new Error(`Unlink failed (400): edge not found: ${from} -[${type}]-> ${to}`)
+        }
+        existing.delete(key)
+        calls.unlinked.push(key)
+      },
+      async causalChain([seed], relation, limitK = 10) {
+        const words = []
+        for (const key of existing) {
+          const [from, type, to] = key.split('\u0000')
+          if (from === seed && type === relation) words.push({ word: to, score: 1 })
+          if (words.length >= limitK) break
+        }
+        return words
+      }
+    }
+  }
+
+  test('edgesOfGraph dedupes duplicate edges and skips malformed ones', () => {
+    const edges = edgesOfGraph(makeGraph([
+      ['A', 'supersedes', 'B'],
+      ['A', 'supersedes', 'B'],
+      ['A', '', 'B'],
+      [null, 'r', 'B']
+    ]))
+    assert.deepEqual(edges, [E('A', 'supersedes', 'B')])
+  })
+
+  test('diffEdges splits new, removed, and unchanged edges', () => {
+    const desired = [E('A', 'r', 'B'), E('B', 'r', 'C'), E('C', 'r', 'D')]
+    const previous = [E('A', 'r', 'B'), E('C', 'r', 'D'), E('Z', 'r', 'GONE')]
+    const { toLink, toUnlink } = diffEdges(desired, previous)
+    assert.deepEqual(toLink, [E('B', 'r', 'C')])
+    assert.deepEqual(toUnlink, [E('Z', 'r', 'GONE')])
+  })
+
+  test('diffEdges with no mirror means full link, nothing to unlink', () => {
+    const { toLink, toUnlink } = diffEdges([E('A', 'r', 'B')], null)
+    assert.deepEqual(toLink, [E('A', 'r', 'B')])
+    assert.deepEqual(toUnlink, [])
+  })
+
+  test('first sync links everything; second sync with mirror sends nothing', async () => {
+    const client = fakeClient()
+    const graph = makeGraph([['A', 'supersedes', 'B'], ['A', 'related', 'C']])
+
+    const first = await syncGraphToAnchorDB(client, graph, null)
+    assert.equal(first.linked, 2)
+    assert.equal(first.failed, 0)
+    assert.equal(first.unlinked, 0)
+
+    const second = await syncGraphToAnchorDB(client, graph, first.edges)
+    assert.equal(second.linked, 0)
+    assert.equal(second.unlinked, 0)
+    assert.equal(second.kept, 2)
+    assert.equal(second.failed, 0)
+    assert.equal(client.calls.linked.length, 2) // tidak ada link ulang
+  })
+
+  test('removed markdown edges get unlinked, tolerating edge not found', async () => {
+    const client = fakeClient(new Set([E('A', 'supersedes', 'B'), E('OLD', 'r', 'GONE')]))
+    const graph = makeGraph([['A', 'supersedes', 'B']]) // OLD hilang dari markdown
+    const previous = [E('A', 'supersedes', 'B'), E('OLD', 'r', 'GONE')]
+
+    const result = await syncGraphToAnchorDB(client, graph, previous)
+    assert.equal(result.unlinked, 1)
+    assert.equal(result.failed, 0)
+    assert.deepEqual(client.calls.unlinked, [E('OLD', 'r', 'GONE')])
+  })
+
+  test('server wiped fresh: probe rejects stale mirror, full link instead', async () => {
+    // Server kosong (container baru), mirror masih menandai dua edge lama.
+    // Probe causal tidak menemukan edge sampel → mirror dibuang → full link.
+    const client = fakeClient(new Set())
+    const graph = makeGraph([['A', 'supersedes', 'B']])
+    const previous = [E('A', 'supersedes', 'B'), E('OLD', 'r', 'GONE')]
+
+    const result = await syncGraphToAnchorDB(client, graph, previous)
+    assert.equal(result.linked, 1)
+    assert.equal(result.unlinked, 0) // tidak ada unlink: mirror dianggap tidak sah
+    assert.equal(result.failed, 0)
+    assert.deepEqual(result.edges, [E('A', 'supersedes', 'B')])
+  })
+
+  test('probe failure (network error) falls back to full link', async () => {
+    const client = fakeClient(new Set())
+    client.causalChain = async () => { throw new Error('connection lost') }
+    const graph = makeGraph([['A', 'r', 'B']])
+    const result = await syncGraphToAnchorDB(client, graph, [E('A', 'r', 'B')])
+    assert.equal(result.linked, 1)
+    assert.equal(result.failed, 0)
+  })
+
+  test('failed links are reported and mirror stays behind for retry', async () => {
+    const client = fakeClient()
+    client.link = async () => { throw new Error('boom') }
+    const result = await syncGraphToAnchorDB(client, makeGraph([['A', 'r', 'B']]), null)
+    assert.equal(result.failed, 1)
+    assert.equal(result.linked, 0)
   })
 })
 
