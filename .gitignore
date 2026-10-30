@@ -4,3 +4,4 @@ node_modules/
 .codex/
 .opencode/
 GEMINI.md
+.agents/
