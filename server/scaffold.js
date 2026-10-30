@@ -249,6 +249,15 @@ else incoming \`agrees_with\` → \`consensus\`, else \`uncontested\`.
 \`GET /api/consensus?target=<claimId>\` is read-only. Requires AnchorDB
 plus a mapped \`consensus\` role.
 
+Sources graph (whole project): a third AnchorDB model, the \`sources\`
+role, holds every project file as a node (id = repo-relative path) and
+every relative JS import as an edge stored in both directions
+(\`imports\`, \`imported_by\`). Hidden folders are skipped except
+.github; node_modules, dist, and .gitignore patterns are ignored.
+\`knl-view sources sync\` is idempotent and server-authoritative (no
+local mirror); \`knl-view sources trace --target=<path>\` and
+\`GET /api/sources/trace?target=<path>\` answer file lineage.
+
 ## Rules
 
 - Never move or delete files to satisfy the map. Either add the file or

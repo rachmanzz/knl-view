@@ -23,6 +23,7 @@ import {
 } from '../server/consensus.js'
 import { readProjectConfig, readGlobalConfig, projectSlug, anchordbClientOptions, resolveModel, resolveSettings, DEFAULT_MODEL } from '../server/config.js'
 import { createAnchorWireClient, mirrorStillValid } from '../server/graph/anchordb_client.js'
+import { syncSourcesToAnchorDB, traceSources } from '../server/graph/sources.js'
 import { readModelRegistry, registerModel, generateModelName, modelRegistryPath } from '../server/models_registry.js'
 import {
   latestRelease,
@@ -84,6 +85,11 @@ Commands:
   consensus retract <a> <b> Remove any relation between two claims
   consensus status <id>     Consensus status of one claim
   consensus list            Locally known claims with their status
+  sources sync              Sync the whole-project dependency graph (file
+                            nodes + import edges) into the AnchorDB
+                            "sources" model; server-authoritative, no mirror
+  sources trace --target=<path>  File lineage over the sources graph
+                            (--hops, --direction in|out|both)
 
 Options:
   --port, -p <number>     HTTP port (default: 8085, or knl-config.json)
@@ -211,6 +217,18 @@ if (consensusSub) {
   process.exit(0)
 }
 
+// The "sources" command: dependency graph of the whole project (not just
+// .knowledges) stored purely in the AnchorDB sources model.
+const sourcesSub = positionals?.[0] === 'sources' ? positionals?.[1] : null
+if (sourcesSub) {
+  try {
+    await runSourcesCommand(sourcesSub, values, { settings })
+  } catch (err) {
+    fail(`Sources command failed: ${err.message}`)
+  }
+  process.exit(0)
+}
+
 // Register the project's whole models map to the global registry (updating
 // path/timestamp when this project owns them) and warn about names claimed
 // by other projects. This local registration needs no server connection.
@@ -285,7 +303,8 @@ const server = createKnowledgeServer({
   host: settings.host,
   port,
   anchordb: settings.anchordb,
-  consensusModel: resolveModel(settings.models, 'consensus')
+  consensusModel: resolveModel(settings.models, 'consensus'),
+  sourcesModel: resolveModel(settings.models, 'sources')
 })
 
 server.on('error', (err) => {
@@ -330,6 +349,11 @@ server.listen(port, settings.host, () => {
             process.stdout.write(`  consensus ready (${server.knlAnchorDB.consensusModel})\n`)
           } else if (server.knlAnchorDB.consensusError) {
             process.stdout.write(`  consensus unavailable: ${server.knlAnchorDB.consensusError}\n`)
+          }
+          if (server.knlAnchorDB.sourcesClient) {
+            process.stdout.write(`  sources ready (${server.knlAnchorDB.sourcesModel})\n`)
+          } else if (server.knlAnchorDB.sourcesError) {
+            process.stdout.write(`  sources unavailable: ${server.knlAnchorDB.sourcesError}\n`)
           }
         } else {
           process.stdout.write(`  anchordb failed: ${result.reason} (viewer runs local only)\n`)
@@ -747,6 +771,69 @@ async function runConsensusCommand(sub, args, { settings }) {
   }
 
   fail(`Unknown consensus subcommand: ${sub || '(empty)'}\n${usage}`)
+}
+
+// The "sources" subcommands: the whole project as a dependency graph in the
+// AnchorDB sources model. Everything lives on the server: file nodes are
+// records (list-able), import edges are stored in both directions, and sync
+// enumerates the server's own state instead of a local mirror.
+async function runSourcesCommand(sub, values, { settings }) {
+  if (!settings.anchordb) {
+    fail('The sources graph lives in AnchorDB, which is not configured.\n' +
+      'Run "knl-view install anchordb" first (optional layer).')
+  }
+  const sourcesModel = settings.models?.sources
+  if (!sourcesModel) {
+    fail('Role "sources" is not mapped in this project\'s models map.\n' +
+      'Run: knl-view model new sources')
+  }
+  const base = anchordbClientOptions(settings.anchordb)
+  const client = await createAnchorWireClient({ ...base, model: sourcesModel })
+  const projectRoot = process.cwd()
+
+  if (sub === 'sync') {
+    const result = await syncSourcesToAnchorDB(client, projectRoot)
+    const parts = [`${result.nodes} files`, `${result.edges} import edges`]
+    if (result.linked) parts.push(`+${result.linked} linked`)
+    if (result.unlinked) parts.push(`-${result.unlinked} unlinked`)
+    if (result.saved) parts.push(`${result.saved} records saved`)
+    if (result.failed) parts.push(`${result.failed} FAILED`)
+    process.stdout.write(`sources synced: ${parts.join(', ')}\n`)
+    if (result.failed) {
+      process.stderr.write('knl-view: some operations failed; run "knl-view sources sync" again to retry.\n')
+    }
+    return
+  }
+
+  if (sub === 'trace') {
+    const target = values.target
+    if (!target) {
+      fail('Parameter --target is required:\n  knl-view sources trace --target=<repo-relative path> [--hops=2] [--direction=in|out|both]')
+    }
+    let direction = 'both'
+    if (values.direction !== undefined) {
+      if (!['in', 'out', 'both'].includes(values.direction)) {
+        fail(`--direction must be in, out, or both, got "${values.direction}".`)
+      }
+      direction = values.direction
+    }
+    const hops = Number.parseInt(values.hops || '2', 10)
+    const maxHops = Number.isInteger(hops) && hops > 0 ? hops : 2
+    const { out, in: inc } = await traceSources(client, target, direction, maxHops)
+    process.stdout.write(JSON.stringify({
+      center: target,
+      maxHops,
+      direction,
+      out: out.map(([id, hop]) => ({ id, hop })),
+      in: inc.map(([id, hop]) => ({ id, hop }))
+    }, null, 2) + '\n')
+    return
+  }
+
+  fail('Unknown sources subcommand.\n' +
+    'Usage:\n' +
+    '  knl-view sources sync\n' +
+    '  knl-view sources trace --target=<repo-relative path> [--hops=2] [--direction=in|out|both]')
 }
 
 function fail(message) {

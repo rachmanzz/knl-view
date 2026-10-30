@@ -298,6 +298,29 @@ local mirror backs the inbound half), and a `statements` map of the
 claim texts involved. Returns `503` when AnchorDB is off or the
 `consensus` role is not mapped.
 
+### Sources graph (whole project)
+
+A third AnchorDB model, the `sources` role in the models map, holds the
+dependency graph of the whole project, not just `.knowledges`: every file
+becomes a node (id = repo-relative path; hidden folders are skipped except
+`.github`, and `node_modules`, `dist`, and `.gitignore` patterns are
+ignored), and every relative JS import becomes an edge. Edges are stored
+in both directions (`imports`, `imported_by`) so lineage works without any
+local mirror: sync is server-authoritative, enumerating the server's own
+records and edges before applying the difference from a fresh disk scan.
+
+```sh
+knl-view model new sources
+knl-view sources sync
+knl-view sources trace --target=server/index.js --direction=out --hops=2
+```
+
+`sync` is idempotent: run it again after refactoring and only the
+difference is applied. Removed files lose their edges (the wire protocol
+has no record delete, so an edgeless record is left behind, invisible to
+traces). The read-only HTTP endpoint answers the same queries:
+`GET /api/sources/trace?target=<path>&direction=in|out|both&hops=N`.
+
 ### CLI Query
 
 ```sh
@@ -313,6 +336,7 @@ When `knl-view` is running as a local server:
 - `GET /api/graph/trace?target=<id>&hops=2`: Returns an isolated $N$-hop neighborhood subgraph for AI agents or interactive visualization.
 - `GET /api/anchordb/trace?target=<id>&hops=2`: Returns a causal chain traced on the AnchorDB server (requires the global `anchordb` config block). Returns `503` when AnchorDB is off or unreachable.
 - `GET /api/consensus?target=<claimId>`: Read-only consensus status for one claim (requires AnchorDB and a mapped `consensus` role). Returns `503` when AnchorDB is off or the role is unmapped, `400` without a target.
+- `GET /api/sources/trace?target=<path>&direction=in|out&hops=2`: Read-only file lineage over the whole-project sources graph (requires AnchorDB and a mapped `sources` role). Returns `503` when unavailable, `400` without a target or with a bad direction.
 
 ## Development
 

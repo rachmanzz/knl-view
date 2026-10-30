@@ -5,6 +5,7 @@ import path from 'node:path'
 import { readMap, normalizeMap, decorateNode } from './map.js'
 import { buildGraphFromRoot } from './graph/parser.js'
 import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain, traceInboundFromMirror, mergeLineage, mirrorStillValid } from './graph/anchordb_client.js'
+import { traceSources } from './graph/sources.js'
 import {
   deriveStatus,
   readClaimsIndex,
@@ -42,7 +43,7 @@ const MD_EXTS = new Set(['md', 'markdown', 'prd'])
 const MAX_DOC_BYTES = 8 * 1024 * 1024
 const TITLE_READ_BYTES = 8192
 
-export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085, anchordb = null, consensusModel = null }) {
+export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085, anchordb = null, consensusModel = null, sourcesModel = null }) {
   const rootAbs = path.resolve(root)
   const distAbs = dist ? path.resolve(dist) : null
   // Live AnchorDB connection status lives here, not a snapshot: attachAnchorDB
@@ -55,7 +56,10 @@ export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', p
     syncedAt: null,
     consensusModel,
     consensusClient: null,
-    consensusError: null
+    consensusError: null,
+    sourcesModel,
+    sourcesClient: null,
+    sourcesError: null
   }
 
   const server = http.createServer((req, res) => {
@@ -113,6 +117,17 @@ export async function attachAnchorDB(server) {
     } catch (err) {
       state.consensusClient = null
       state.consensusError = err.message
+    }
+  }
+
+  // Third client for the sources model (whole-project dependency graph),
+  // same best-effort policy as consensus.
+  if (state.sourcesModel) {
+    try {
+      state.sourcesClient = await createAnchorWireClient({ ...options, model: state.sourcesModel })
+    } catch (err) {
+      state.sourcesClient = null
+      state.sourcesError = err.message
     }
   }
   let synced = false
@@ -200,6 +215,9 @@ async function route(req, res, rootAbs, distAbs, listen) {
   }
   if (pathname === '/api/consensus') {
     return handleConsensus(res, listen.anchordb, url)
+  }
+  if (pathname === '/api/sources/trace') {
+    return handleSourcesTrace(res, listen.anchordb, url)
   }
   if (pathname.startsWith('/api/')) {
     return sendJson(res, 404, { error: `Unknown endpoint: ${pathname}` })
@@ -328,6 +346,58 @@ async function handleConsensus(res, state, url) {
     })
   } catch (err) {
     return sendJson(res, 502, { error: `Consensus status failed: ${err.message}` })
+  }
+}
+
+// Read-only lineage over the sources model (whole-project dependency
+// graph). Sync stays in the CLI; the server only answers traces.
+async function handleSourcesTrace(res, state, url) {
+  if (!state?.config) {
+    return sendJson(res, 503, { error: 'AnchorDB is off. Add the "anchordb" block to the global knl-config.json.' })
+  }
+  if (state.status !== 'connected' || !state.client) {
+    return sendJson(res, 503, {
+      error: `AnchorDB is not connected yet (status: ${state.status}).`,
+      detail: state.error || null
+    })
+  }
+  if (!state.sourcesModel) {
+    return sendJson(res, 503, {
+      error: 'Role "sources" is not mapped in this project\'s models map.',
+      hint: 'knl-view model new sources'
+    })
+  }
+  if (!state.sourcesClient) {
+    return sendJson(res, 503, {
+      error: 'Sources model is not reachable.',
+      detail: state.sourcesError || 'no sources client'
+    })
+  }
+  const target = url.searchParams.get('target')
+  if (!target) {
+    return sendJson(res, 400, { error: 'Parameter "target" is required.' })
+  }
+  let direction = 'both'
+  const rawDirection = url.searchParams.get('direction')
+  if (rawDirection) {
+    if (!['in', 'out', 'both'].includes(rawDirection)) {
+      return sendJson(res, 400, { error: `direction must be in, out, or both, got "${rawDirection}".` })
+    }
+    direction = rawDirection
+  }
+  const hops = Number.parseInt(url.searchParams.get('hops') || '2', 10)
+  const maxHops = Number.isInteger(hops) && hops > 0 ? hops : 2
+  try {
+    const { out, in: inc } = await traceSources(state.sourcesClient, target, direction, maxHops)
+    return sendJson(res, 200, {
+      target,
+      maxHops,
+      direction,
+      out: out.map(([id, hop]) => ({ id, hop, via: 'out' })),
+      in: inc.map(([id, hop]) => ({ id, hop, via: 'in' }))
+    })
+  } catch (err) {
+    return sendJson(res, 502, { error: `Sources trace failed: ${err.message}` })
   }
 }
 
