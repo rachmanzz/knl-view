@@ -9,7 +9,7 @@ import { SYNTAX_LANGUAGES, extractCode } from './syntax.js'
 // path) and the named symbols they define (id = `<path>#<name>`, from
 // tree-sitter syntax extraction: JS family and Go today, one uniform API
 // per language). Edges: file imports file, file defines symbol, symbol
-// calls symbol — each stored in both directions because causalChain walks
+// calls symbol, each stored in both directions because causalChain walks
 // forward only. Hidden paths (dot-prefixed) are skipped except .github;
 // node_modules, dist, and .gitignore patterns are skipped so dependency
 // folders cannot flood the graph.
@@ -218,11 +218,8 @@ export async function buildSourcesGraph(rootAbs, files = null) {
     }
     structure[rel] = { ext, modulePath, ...extracted }
 
-    // Symbol ids are `<path>#<name>`, but a name may legitimately occur
-    // more than once in one file (three `walk` helpers, say). Plain ids
-    // would collide on one AnchorDB record, so repeated names get a line
-    // suffix: `<path>#<name>@<line>`. Deterministic, and call resolution
-    // sees them as ambiguous like any other repeated name.
+    // A name defined more than once in one file would collide on one
+    // AnchorDB record id, so repeated names get a line suffix: `@<line>`.
     const nameCounts = new Map()
     for (const symbol of extracted.symbols) {
       nameCounts.set(symbol.name, (nameCounts.get(symbol.name) || 0) + 1)
@@ -313,10 +310,8 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
     }
     if (!owner) continue
     const from = owner.id || `${fromRel}#${owner.name}`
-    // Import evidence: a bare-name fallback is only allowed for a call
-    // with no receiver, or whose receiver is an import of this file.
-    // Without this, `s.logger.Log()` anywhere would be absorbed by the
-    // single project-wide `Log()` definition no matter its receiver type.
+    // Bare-name fallback needs import evidence: an unproven receiver like
+    // `s.logger.Log()` would be absorbed by the one project-wide `Log()`.
     if (call.recv && !importNames.has(call.recv)) continue
     const candidates = []
     if (call.recv) candidates.push(`${call.recv}.${call.name}`)
@@ -409,7 +404,7 @@ export async function writeLabelFiles(rootAbs, labelDir = DEFAULT_LABEL_DIR, sym
       await fs.rm(path.join(base, `${rel}.md`), { force: true })
       deleted.push(rel)
     } catch {
-      // Same: best effort.
+      // Best effort too: a failed delete leaves one stale label file.
     }
   }
   return { written, deleted }
@@ -516,9 +511,9 @@ export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir } = {}) 
   // whatever this sync successfully saved.
   const live = new Set(serverAttrs.keys())
 
-  // One transactional batch when the wire client supports it (orders of
-  // magnitude faster than per-record saves at scale); per-record fallback
-  // keeps a single bad record from losing the rest.
+  // One transactional batch when the wire client supports it (faster than
+  // per-record saves at scale); per-record fallback keeps a single bad
+  // record from losing the rest.
   const saveOne = async (item) => {
     await client.saveWithID(item.name, item.props)
     if (item.tombstone) tombstoned += 1

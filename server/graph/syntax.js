@@ -102,7 +102,7 @@ function specsFromTree(grammar, tree) {
           const fragment = args && firstDescendant(args, 'string_fragment')
           if (fragment) specs.push(fragment.text)
           // `const x = require('y')` / `const x = await import('y')`: the
-          // declarator name is the binding — the visit starts above it, so
+          // declarator name is the binding: the visit starts above it, so
           // walk down from any enclosing declarator via field lookup here.
           let parent = node.parent
           while (parent && parent.type === 'await_expression') parent = parent.parent

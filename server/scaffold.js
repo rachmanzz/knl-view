@@ -250,7 +250,7 @@ else incoming \`agrees_with\` → \`consensus\`, else \`uncontested\`.
 plus a mapped \`consensus\` role.
 
 Sources graph (whole project): a third AnchorDB model, the \`sources\`
-role, holds the dependency graph of the whole project — files and their
+role, holds the dependency graph of the whole project: files and their
 named symbols. Every file is a node (id = repo-relative path); import
 edges are extracted with tree-sitter syntax parsing (JS family and Go
 today) and stored in both directions (\`imports\`, \`imported_by\`).
@@ -261,7 +261,7 @@ a line suffix \`<path>#<name>@<line>\`), kinds are \`function\`,
 (file → symbol) and \`calls\`/\`called_by\` (symbol → symbol), both
 directions stored. Call resolution is conservative: the call belongs to
 its innermost enclosing symbol and the callee must match exactly one
-definition project-wide — ambiguous names are skipped, never guessed.
+definition project-wide; ambiguous names are skipped, never guessed.
 Label text (symbol names and kinds; AnchorDB attributes are
 numeric-only) lives in \`.knowledges/.knl-data/<path>.md\`, one file per
 source file that has symbols; override with \`labelDir\` in the project
@@ -269,7 +269,7 @@ config. Hidden folders are skipped except .github; node_modules, dist,
 and .gitignore patterns are ignored. \`knl-view sources sync\` is
 idempotent and server-authoritative (no local mirror);
 \`knl-view sources trace --target=<id>\` and
-\`GET /api/sources/trace?target=<id>\` answer lineage — a target
+\`GET /api/sources/trace?target=<id>\` answer lineage: a target
 containing \`#\` walks symbol lineage (\`calls\`/\`called_by\`), a
 plain path walks file lineage (\`imports\`/\`imported_by\`). A removed
 file or symbol is tombstoned (attribute \`tombstone = 2\`) after its
@@ -295,8 +295,8 @@ or, with agy: \`agy plugin install https://github.com/rachmanzz/decisionskills\`
 ## Features writing rules
 
 Under \`features/{feature_name}/\`, prefer to keep at least:
-- \`prd.md\` — Product Requirements Document for this feature
-- \`detail-plan.md\` — concrete implementation plan, decisions, trade-offs
+- \`prd.md\`: Product Requirements Document for this feature
+- \`detail-plan.md\`: concrete implementation plan, decisions, trade-offs
 
 Names are kebab-case for the folder. Keep other artifacts minimal and cover
 them via \`map.json\` if they need custom menu labels/order.
@@ -304,8 +304,8 @@ them via \`map.json\` if they need custom menu labels/order.
 ## Futures writing rules
 
 Under \`futures/\`, the base typically has:
-- \`README.md\` — vision/overview
-- \`prd.md\` — global PRD covering proposed future work
+- \`README.md\`: vision/overview
+- \`prd.md\`: global PRD covering proposed future work
 
 Use kebab-case for any additional future documents. Defer exotic filenames
 to \`map.json\`.
@@ -325,7 +325,7 @@ of that directory.
 
 ### Naming
 
-\`roasted/{roasted_name}_v{number}.md\` — kebab-case name, integer
+\`roasted/{roasted_name}_v{number}.md\`: kebab-case name, integer
 \`number\` starting at \`1\`.
 
 ### Stack order
@@ -365,7 +365,7 @@ this.
   record id contains the old name/path. Sync tombstones the stale record
   and creates the new one; trace by the new id afterwards.
 - A new architectural decision: trigger the decision-history skill
-  (install it first if missing — see "Decision history skill" above).
+  (install it first if missing; see "Decision history skill" above).
   The decision block format is that skill's domain; this skill never
   writes decision blocks.
 - A technical disagreement worth recording as claims:

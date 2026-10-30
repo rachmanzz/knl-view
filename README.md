@@ -160,7 +160,7 @@ block into the global config:
   `~/.knlview/bin/`, and starts `anchordb-server` detached (logs in
   `~/.knlview/anchordb.log`, data in `~/.knlview/anchordb-data`).
 - **Other platforms**: a Linux container from
-  `ghcr.io/rachmanzz/anchordb` via docker or podman — the command refuses
+  `ghcr.io/rachmanzz/anchordb` via docker or podman; the command refuses
   to continue if neither is installed.
 
 Non-interactive (CI/scripts): add `--yes`. Explicit method: `--method=binary`
@@ -323,8 +323,8 @@ Each file also defines **symbol nodes**, extracted from the same parse:
   enclosing symbol, and the callee must match exactly one definition
   project-wide (same package directory preferred in Go). A receiver-qualified
   call (`obj.Method()`) resolves only when the receiver is an import
-  binding of the file — otherwise it is skipped, never guessed.
-- Label text (symbol names and kinds — AnchorDB attributes are
+  binding of the file, otherwise it is skipped, never guessed.
+- Label text (symbol names and kinds; AnchorDB attributes are
   numeric-only) is written to `.knowledges/.knl-data/<path>.md`, one file
   per source file that has symbols; override the location with `labelDir`
   in the project config. Labels are regenerated and pruned on every sync.
@@ -340,8 +340,8 @@ knl-view sources trace --target=server/index.js#handleTrace --direction=in
 difference is applied. A target containing `#` traces symbol lineage over
 `calls`/`called_by`; a plain path traces file lineage over
 `imports`/`imported_by`. Records the disk no longer has are tombstoned
-(attribute `tombstone = 2`) after their edges are unlinked — the wire
-protocol has no record delete — and a reappearing file lifts the tombstone
+(attribute `tombstone = 2`) after their edges are unlinked (the wire
+protocol has no record delete), and a reappearing file lifts the tombstone
 and relinks its edges. Sync reports `ORPHAN EDGES` when an edge endpoint
 failed to save, so a broken sync is never silent. The read-only HTTP
 endpoint answers the same queries:
