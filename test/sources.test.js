@@ -5,13 +5,16 @@ import fs from 'node:fs'
 import os from 'node:os'
 import {
   scanSourceFiles,
-  parseJsImports,
   resolveImportSpecifier,
+  resolveJsSpecifiers,
+  resolveGoSpecifiers,
+  goModulePath,
   buildSourcesGraph,
   desiredSourceEdgeKeys,
   syncSourcesToAnchorDB,
   SOURCE_RELATIONS
 } from '../server/graph/sources.js'
+import { extractImportSpecifiers } from '../server/graph/syntax.js'
 import { edgeKey } from '../server/graph/anchordb_client.js'
 
 function makeRepo() {
@@ -62,8 +65,8 @@ describe('scanSourceFiles', () => {
   })
 })
 
-describe('parseJsImports', () => {
-  test('finds ESM, dynamic, and CJS relative imports only', () => {
+describe('extractImportSpecifiers (tree-sitter)', () => {
+  test('JS: ESM, dynamic, and CJS specifiers, raw and unfiltered', async () => {
     const code = [
       "import x from './a.js'",
       "import { b } from '../lib/b.js'",
@@ -75,10 +78,99 @@ describe('parseJsImports', () => {
       "import pkg from '@scope/pkg'",
       "const url = import('https://example.com/x.js')"
     ].join('\n')
-    const specs = parseJsImports(code)
+    const specs = await extractImportSpecifiers('.js', code)
     assert.deepEqual(specs.sort(), [
-      '../lib/b.js', './a.js', './c.js', './d.js', './e.js', './side-effect.js'
+      '../lib/b.js', './a.js', './c.js', './d.js', './e.js',
+      './side-effect.js', '@scope/pkg', 'https://example.com/x.js', 'node:fs'
     ])
+  })
+
+  test('JS: comments and strings do not produce phantom imports', async () => {
+    const code = [
+      '// import x from "./fake.js"',
+      'const s = "import y from \'./also-fake.js\'"',
+      "import real from './real.js'"
+    ].join('\n')
+    const specs = await extractImportSpecifiers('.js', code)
+    assert.deepEqual(specs, ['./real.js'])
+  })
+
+  test('Go: every import_spec path, aliased or not', async () => {
+    const code = [
+      'package main',
+      'import "fmt"',
+      'import (',
+      '\tq "github.com/acme/app/internal/queue"',
+      '\t_ "github.com/acme/app/internal/boot"',
+      ')'
+    ].join('\n')
+    const specs = await extractImportSpecifiers('.go', code)
+    assert.deepEqual(specs.sort(), [
+      'fmt', 'github.com/acme/app/internal/boot', 'github.com/acme/app/internal/queue'
+    ])
+  })
+
+  test('a syntax error never throws; well-formed imports still come out', async () => {
+    const code = "import a from './a.js'\nfunction broken( { no close\n"
+    const specs = await extractImportSpecifiers('.js', code)
+    assert.deepEqual(specs, ['./a.js'])
+  })
+})
+
+describe('resolveJsSpecifiers', () => {
+  const files = {
+    'src/a.js': {},
+    'src/lib/b.js': {},
+    'src/lib/c/index.js': {}
+  }
+
+  test('keeps only specifiers that resolve to scanned files', () => {
+    assert.deepEqual(
+      resolveJsSpecifiers('src/main.js', ['./a.js', './missing.js', 'node:fs'], files),
+      ['src/a.js']
+    )
+    assert.deepEqual(
+      resolveJsSpecifiers('src/x.js', ['./lib/c'], files),
+      ['src/lib/c/index.js']
+    )
+  })
+})
+
+describe('goModulePath and resolveGoSpecifiers', () => {
+  test('module path comes from go.mod', async () => {
+    const root = makeRepo()
+    fs.writeFileSync(path.join(root, 'go.mod'), 'module github.com/acme/app\n\ngo 1.22\n', 'utf8')
+    assert.equal(await goModulePath(root), 'github.com/acme/app')
+    assert.equal(await goModulePath(makeRepo()), null)
+  })
+
+  const files = {
+    'main.go': {},
+    'cmd/serve/main.go': {},
+    'internal/queue/queue.go': {},
+    'internal/queue/helper.go': {},
+    'internal/queue/README.md': {},
+    'vendor/github.com/other/x.go': {}
+  }
+
+  test('module-internal imports resolve to the package directory files', () => {
+    assert.deepEqual(
+      resolveGoSpecifiers('github.com/acme/app/internal/queue', 'github.com/acme/app', files).sort(),
+      ['internal/queue/helper.go', 'internal/queue/queue.go']
+    )
+    assert.deepEqual(
+      resolveGoSpecifiers('github.com/acme/app', 'github.com/acme/app', files),
+      ['main.go']
+    )
+  })
+
+  test('external and stdlib imports resolve to nothing', () => {
+    assert.deepEqual(resolveGoSpecifiers('fmt', 'github.com/acme/app', files), [])
+    assert.deepEqual(resolveGoSpecifiers('github.com/other/x', 'github.com/acme/app', files), [])
+  })
+
+  test('no go.mod means no local resolution at all', () => {
+    assert.deepEqual(resolveGoSpecifiers('github.com/acme/app/internal/queue', null, files), [])
   })
 })
 
@@ -116,6 +208,22 @@ describe('buildSourcesGraph', () => {
       'server/graph/parser.js->server/graph/model.js',
       'server/index.js->server/graph/parser.js'
     ])
+  })
+  test('Go repo: module-internal imports become edges, external do not', async () => {
+    const root = makeRepo()
+    fs.writeFileSync(path.join(root, 'go.mod'), 'module github.com/acme/app\n\ngo 1.22\n', 'utf8')
+    write(root, 'main.go', 'package main\n\nimport (\n\t"fmt"\n\t"github.com/acme/app/internal/queue"\n)\n\nfunc main() { queue.Run() }\n')
+    write(root, 'internal/queue/queue.go', 'package queue\n\nimport "fmt"\n\nfunc Run() { fmt.Println("q") }\n')
+    write(root, 'internal/queue/helper.go', 'package queue\n\nfunc help() {}\n')
+    write(root, 'README.md', '# app\n')
+
+    const { nodes, edges } = await buildSourcesGraph(root)
+    const pairs = edges.map((e) => `${e.from}->${e.to}`).sort()
+    assert.deepEqual(pairs, [
+      'main.go->internal/queue/helper.go',
+      'main.go->internal/queue/queue.go'
+    ])
+    assert.equal(nodes.length, 5) // go.mod itself is a file node too
   })
 })
 

@@ -796,7 +796,7 @@ async function runSourcesCommand(sub, values, { settings }) {
     const parts = [`${result.nodes} files`, `${result.edges} import edges`]
     if (result.linked) parts.push(`+${result.linked} linked`)
     if (result.unlinked) parts.push(`-${result.unlinked} unlinked`)
-    if (result.saved) parts.push(`${result.saved} records saved`)
+    if (result.saved) parts.push(`${result.saved} record${result.saved === 1 ? '' : 's'} saved`)
     if (result.tombstoned) parts.push(`${result.tombstoned} tombstoned`)
     if (result.failed) parts.push(`${result.failed} FAILED`)
     process.stdout.write(`sources synced: ${parts.join(', ')}\n`)

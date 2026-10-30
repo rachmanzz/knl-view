@@ -2,10 +2,12 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { GraphNode } from './model.js'
 import { edgeKey } from './anchordb_client.js'
+import { SYNTAX_LANGUAGES, extractImportSpecifiers } from './syntax.js'
 
 // Sources graph: the whole project as a dependency graph in AnchorDB, not
 // just the .knowledges markdown. Every file becomes a node (id = repo
-// relative path), every relative JS import becomes an edge. Hidden paths
+// relative path); import edges come from tree-sitter syntax extraction
+// (JS family and Go today, one uniform API per language). Hidden paths
 // (dot-prefixed) are skipped except .github; node_modules, dist, and
 // .gitignore patterns are skipped so dependency folders cannot flood the
 // graph.
@@ -113,20 +115,44 @@ export async function scanSourceFiles(rootAbs) {
  * Relative specifiers from one JS file's text: ESM import/export sources,
  * dynamic import(), and CommonJS require(). Bare and URL specifiers are
  * skipped; only './' and '../' resolve to project files.
+ *
+ * Extraction itself is tree-sitter (syntax.js); this function is the JS
+ * half of resolution: which extracted specifiers point at project files.
  */
-export function parseJsImports(content) {
-  const specs = []
-  const patterns = [
-    /import\s+[^'"]*?from\s+['"]([^'"]+)['"]/g,
-    /import\s*['"]([^'"]+)['"]/g,
-    /export\s+[^'"]*?from\s+['"]([^'"]+)['"]/g,
-    /import\(\s*['"]([^'"]+)['"]\s*\)/g,
-    /require\(\s*['"]([^'"]+)['"]\s*\)/g
-  ]
-  for (const pattern of patterns) {
-    for (const match of content.matchAll(pattern)) specs.push(match[1])
+export function resolveJsSpecifiers(fromRel, specs, files) {
+  const relative = specs.filter((spec) => spec.startsWith('./') || spec.startsWith('../'))
+  return relative.map((spec) => resolveImportSpecifier(fromRel, spec, files)).filter(Boolean)
+}
+
+/**
+ * Module path declared by the project's go.mod, or null when there is
+ * none. Go imports only resolve against it: a specifier equal to the
+ * module path or starting with it is local, everything else (standard
+ * library, remote modules) is external to the graph.
+ */
+export async function goModulePath(rootAbs) {
+  try {
+    const text = await fs.readFile(path.join(rootAbs, 'go.mod'), 'utf8')
+    const match = text.match(/^module\s+(\S+)/m)
+    return match ? match[1] : null
+  } catch {
+    return null
   }
-  return specs.filter((spec) => spec.startsWith('./') || spec.startsWith('../'))
+}
+
+/**
+ * Resolve one Go import specifier to the local files of the imported
+ * package: every .go file in the specifier's directory below the module
+ * root. Returns [] for anything outside the module.
+ */
+export function resolveGoSpecifiers(spec, modulePath, files) {
+  if (!modulePath) return []
+  let sub
+  if (spec === modulePath) sub = ''
+  else if (spec.startsWith(modulePath + '/')) sub = spec.slice(modulePath.length + 1)
+  else return []
+  const dir = sub === '' ? '.' : sub
+  return Object.keys(files).filter((rel) => rel.endsWith('.go') && path.posix.dirname(rel) === dir)
 }
 
 /**
@@ -143,24 +169,34 @@ export function resolveImportSpecifier(fromRel, spec, files) {
 }
 
 /**
- * Build the desired sources graph: nodes for every scanned file, imports
- * edges from relative JS imports. Returns plain arrays so callers can diff
- * without depending on the DirectedGraph type.
+ * Build the desired sources graph: nodes for every scanned file, import
+ * edges from tree-sitter extraction (JS relative imports, Go module-internal
+ * imports). Returns plain arrays so callers can diff without depending on
+ * the DirectedGraph type.
  */
 export async function buildSourcesGraph(rootAbs, files = null) {
   const scanned = files || await scanSourceFiles(rootAbs)
+  const modulePath = await goModulePath(rootAbs)
   const edges = []
   for (const [rel] of Object.entries(scanned)) {
     const ext = path.posix.extname(rel).toLowerCase()
-    if (!JS_EXTS.has(ext)) continue
+    if (!SYNTAX_LANGUAGES[ext]) continue
     let content
     try {
       content = await fs.readFile(path.join(rootAbs, rel), 'utf8')
     } catch {
       continue
     }
-    for (const spec of parseJsImports(content)) {
-      const target = resolveImportSpecifier(rel, spec, scanned)
+    let specs
+    try {
+      specs = await extractImportSpecifiers(ext, content)
+    } catch {
+      continue
+    }
+    const targets = ext === '.go'
+      ? specs.flatMap((spec) => resolveGoSpecifiers(spec, modulePath, scanned))
+      : resolveJsSpecifiers(rel, specs, scanned)
+    for (const target of targets) {
       if (target && target !== rel) edges.push({ from: rel, to: target })
     }
   }
