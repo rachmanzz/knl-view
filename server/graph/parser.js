@@ -5,7 +5,7 @@ import { GraphNode, GraphEdge, DirectedGraph } from './model.js'
 const MD_EXTS = new Set(['.md', '.markdown', '.prd'])
 
 /**
- * Ekstraksi frontmatter sederhana (YAML-like) dan heading pertama.
+ * Simple (YAML-like) frontmatter extraction and the first heading.
  */
 export function extractFrontmatterAndTitle(content) {
   let metadata = {}
@@ -24,7 +24,7 @@ export function extractFrontmatterAndTitle(content) {
   if (metadata.title) {
     title = String(metadata.title).trim()
   } else {
-    // Ambil H1 pertama sebagai judul
+    // Take the first H1 as the title
     const match = body.match(/^#\s+(.+)$/m)
     if (match) {
       title = match[1].trim()
@@ -48,7 +48,7 @@ function parseSimpleYaml(text) {
       const items = val.slice(1, -1).split(',').map(s => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
       result[key] = items
     } else {
-      // Hapus kutip bila ada
+      // Strip quotes when present
       val = val.replace(/^['"]|['"]$/g, '')
       result[key] = val
     }
@@ -57,7 +57,7 @@ function parseSimpleYaml(text) {
 }
 
 /**
- * Parsing file knowledge Markdown (misal: docs/xxx.md atau features/xxx.md).
+ * Parse a knowledge Markdown file (e.g. docs/xxx.md or features/xxx.md).
  */
 export function parseKnowledgeContent(relPath, content) {
   const { metadata, body, title } = extractFrontmatterAndTitle(content)
@@ -72,7 +72,7 @@ export function parseKnowledgeContent(relPath, content) {
 
   const edges = []
 
-  // Parse dependencies dari frontmatter
+  // Parse dependencies from the frontmatter
   const deps = Array.isArray(metadata.depends_on) ? metadata.depends_on : (metadata.depends_on ? [metadata.depends_on] : [])
   for (const dep of deps) {
     edges.push(new GraphEdge({
@@ -82,7 +82,7 @@ export function parseKnowledgeContent(relPath, content) {
     }))
   }
 
-  // Parse references dari frontmatter
+  // Parse references from the frontmatter
   const refs = Array.isArray(metadata.references) ? metadata.references : (metadata.references ? [metadata.references] : [])
   for (const ref of refs) {
     edges.push(new GraphEdge({
@@ -92,12 +92,12 @@ export function parseKnowledgeContent(relPath, content) {
     }))
   }
 
-  // Parse markdown link sederhana [text](target.md)
+  // Parse plain markdown links [text](target.md)
   const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g
   let linkMatch
   while ((linkMatch = linkRegex.exec(body)) !== null) {
     const targetUrl = linkMatch[2].trim()
-    // Abaikan link web eksternal (http/https/mailto)
+    // Ignore external web links (http/https/mailto)
     if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://') && !targetUrl.startsWith('mailto:') && !targetUrl.startsWith('#')) {
       const cleanTarget = targetUrl.split('#')[0].split('?')[0].replace(/^\.\//, '')
       if (cleanTarget) {
@@ -122,7 +122,7 @@ export function parseKnowledgeContent(relPath, content) {
 }
 
 /**
- * Parsing blok keputusan dari file keputusan (format decisionskills: <!-- decision:start -->).
+ * Parse decision blocks from a decision file (decisionskills format: <!-- decision:start -->).
  */
 export function parseDecisionBlocks(relPath, content) {
   const nodes = []
@@ -143,8 +143,8 @@ export function parseDecisionBlocks(relPath, content) {
   return { nodes, edges }
 }
 
-// Bantu field daftar yang boleh diulang: baris "- references: a" lalu
-// "- references: b" menghasilkan [a, b], bukan hanya [b].
+// Helper for list fields that may repeat: the lines "- references: a" then
+// "- references: b" produce [a, b], not just [b].
 function appendList(existing, val) {
   const items = val.split(',').map(s => s.trim().replace(/^`|`$/g, '')).filter(Boolean)
   return existing.concat(items.filter((item) => !existing.includes(item)))
@@ -190,8 +190,8 @@ function parseSingleDecisionBlock(relPath, rawBlock) {  const lines = rawBlock.s
       else if (field === 'decided at') decidedAt = val
       else if (field === 'scope') scope = val
       else if (field === 'tags') tags = val.split(',').map(s => s.trim().replace(/^`|`$/g, '')).filter(Boolean)
-      // Field daftar boleh diulang di beberapa baris; baris kedua menambah,
-      // bukan menimpa baris pertama.
+      // List fields may repeat across lines; the second line appends,
+      // it does not overwrite the first.
       else if (field === 'supersedes') supersedes = appendList(supersedes, val)
       else if (field === 'related') related = appendList(related, val)
       else if (field === 'references') references = appendList(references, val)
@@ -250,7 +250,7 @@ function parseSingleDecisionBlock(relPath, rawBlock) {  const lines = rawBlock.s
 }
 
 /**
- * Bangun graf lengkap secara rekursif dari folder root basis pengetahuan (.knowledges).
+ * Build the full graph recursively from the knowledge base root folder (.knowledges).
  */
 export async function buildGraphFromRoot(rootAbs) {
   const graph = new DirectedGraph()
@@ -267,7 +267,7 @@ export async function buildGraphFromRoot(rootAbs) {
 
     const normRel = relPath.replace(/\\/g, '/')
 
-    // Cek apakah berkas keputusan (di bawah folder decisions/)
+    // Check whether this is a decision file (under the decisions/ folder)
     if (normRel.startsWith('decisions/')) {
       const { nodes, edges } = parseDecisionBlocks(normRel, content)
       for (const n of nodes) graph.addNode(n)

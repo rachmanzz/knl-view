@@ -38,8 +38,8 @@ const TITLE_READ_BYTES = 8192
 export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085, anchordb = null }) {
   const rootAbs = path.resolve(root)
   const distAbs = dist ? path.resolve(dist) : null
-  // Status koneksi AnchorDB hidup di sini, bukan snapshot: attachAnchorDB
-  // mengisinya setelah server jalan, dan route membaca status terkini.
+  // Live AnchorDB connection status lives here, not a snapshot: attachAnchorDB
+  // fills it after the server listens, and routes read the latest status.
   const anchordbState = {
     config: anchordb,
     client: null,
@@ -50,7 +50,7 @@ export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', p
 
   const server = http.createServer((req, res) => {
     route(req, res, rootAbs, distAbs, { host, port, anchordb: anchordbState }).catch((err) => {
-      if (!res.headersSent) sendJson(res, 500, { error: `Gagal memproses permintaan: ${err.message}` })
+      if (!res.headersSent) sendJson(res, 500, { error: `Failed to handle request: ${err.message}` })
       else res.end()
     })
   })
@@ -62,9 +62,9 @@ export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', p
   return server
 }
 
-// Hubungkan knl-view ke AnchorDB setelah server mendengarkan. Kegagalan
-// connect atau sync tidak pernah menjatuhkan server: viewer tetap jalan
-// lokal penuh, status tinggal dibaca lewat state.
+// Connect knl-view to AnchorDB after the server listens. Connect or sync
+// failures never bring the server down: the viewer keeps running fully
+// local, and the status can be read from the state.
 export async function attachAnchorDB(server) {
   const state = server.knlAnchorDB
   if (!state?.config) {
@@ -74,13 +74,13 @@ export async function attachAnchorDB(server) {
   const options = anchordbClientOptions(state.config)
   if (!options) {
     state.status = 'error'
-    state.error = 'URL anchordb tidak bisa dibaca'
+    state.error = 'anchordb URL is unreadable'
     return { ok: false, reason: state.error }
   }
   if (!options.model) {
     state.status = 'error'
-    state.error = 'nama model belum dipetakan'
-    return { ok: false, reason: 'peran "knowledges" belum ada di map "models" knl-config.json — jalankan: knl-view model new knowledges' }
+    state.error = 'model name is not mapped yet'
+    return { ok: false, reason: 'role "knowledges" is missing from the knl-config.json "models" map, run: knl-view model new knowledges' }
   }
   try {
     state.client = await createAnchorWireClient(options)
@@ -100,15 +100,15 @@ export async function attachAnchorDB(server) {
       const previous = await readSyncState(options.model)
       const result = await syncGraphToAnchorDB(state.client, graph, previous)
       if (result.failed === 0) {
-        // Mirror hanya ditulis saat sync bersih, supaya bagian yang gagal
-        // diulang otomatis di start berikutnya.
+        // The mirror is only written on a clean sync, so failed parts are
+        // retried automatically on the next start.
         await writeSyncState(options.model, result.edges)
       }
       state.syncedAt = Date.now()
       state.lastSync = result
       synced = true
     } catch (err) {
-      // Koneksi sudah cukup untuk trace; kegagalan sync hanya dicatat.
+      // A connection is enough for trace; a sync failure is only recorded.
       state.error = err.message
     }
   }
@@ -123,9 +123,9 @@ export async function attachAnchorDB(server) {
   }
 }
 
-// Mirror edge hasil sync terakhir: ~/.knlview/sync-state/<model>.json.
-// File rusak/hilang diperlakukan sebagai "belum pernah sync" (full sync),
-// bukan error — mirror ini murni optimasi, bukan sumber kebenaran.
+// Mirror of the edges from the last sync: ~/.knlview/sync-state/<model>.json.
+// A broken/missing file is treated as "never synced" (full sync), not an
+// error; this mirror is purely an optimization, not a source of truth.
 async function readSyncState(model) {
   try {
     const parsed = JSON.parse(await fs.readFile(syncStatePath(model), 'utf8'))
@@ -142,7 +142,7 @@ async function writeSyncState(model, edges) {
     await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(file, JSON.stringify({ model, syncedAt: new Date().toISOString(), edges }), 'utf8')
   } catch {
-    // Mirror gagal ditulis: sync tetap sah, hanya inkrementalitas hilang.
+    // Mirror write failed: the sync still counts, only incrementality is lost.
   }
 }
 
@@ -161,7 +161,7 @@ async function route(req, res, rootAbs, distAbs, listen) {
   if (pathname === '/api/graph/trace') {
     const target = url.searchParams.get('target') || url.searchParams.get('id')
     if (!target) {
-      return sendJson(res, 400, { error: 'Parameter "target" atau "id" wajib disertakan.' })
+      return sendJson(res, 400, { error: 'Parameter "target" or "id" is required.' })
     }
     const hops = parseInt(url.searchParams.get('hops') || '2', 10)
     const rawDirection = url.searchParams.get('direction')
@@ -177,32 +177,33 @@ async function route(req, res, rootAbs, distAbs, listen) {
     return handleAnchorTrace(res, listen.anchordb, url)
   }
   if (pathname.startsWith('/api/')) {
-    return sendJson(res, 404, { error: `Endpoint tidak dikenal: ${pathname}` })
+    return sendJson(res, 404, { error: `Unknown endpoint: ${pathname}` })
   }
 
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.setHeader('Allow', 'GET, HEAD')
-    return sendJson(res, 405, { error: 'Hanya GET yang didukung.' })
+    return sendJson(res, 405, { error: 'Only GET is supported.' })
   }
 
   return sendStatic(req, res, distAbs, pathname)
 }
 
-// Penelusuran rantai kausal multi-hop di sisi AnchorDB. Hanya aktif bila
-// knl-config.json project membawa blok anchordb dan koneksinya hidup.
+// Multi-hop causal chain trace on the AnchorDB side. Only active when the
+// project's knl-config.json carries an anchordb block and the connection
+// is alive.
 async function handleAnchorTrace(res, state, url) {
   if (!state?.config) {
-    return sendJson(res, 503, { error: 'AnchorDB tidak aktif. Tambahkan blok "anchordb" di knl-config.json.' })
+    return sendJson(res, 503, { error: 'AnchorDB is not active. Add an "anchordb" block to knl-config.json.' })
   }
   if (state.status !== 'connected' || !state.client) {
     return sendJson(res, 503, {
-      error: `AnchorDB belum terhubung (status: ${state.status}).`,
+      error: `AnchorDB not connected yet (status: ${state.status}).`,
       detail: state.error || null
     })
   }
   const target = url.searchParams.get('target') || url.searchParams.get('id')
   if (!target) {
-    return sendJson(res, 400, { error: 'Parameter "target" atau "id" wajib disertakan.' })
+    return sendJson(res, 400, { error: 'Parameter "target" or "id" is required.' })
   }
   const relations = url.searchParams.get('relations')
     ? url.searchParams.get('relations').split(',').map((s) => s.trim()).filter(Boolean)
@@ -280,8 +281,8 @@ async function buildMeta(rootAbs, listen = {}) {
   }
 }
 
-// Baca + normalisasi map.json sekali per permintaan. Tanpa peta pun tidak
-// apa-apa: semua overlay bersifat opsional dan berlaku sebagai anotasi saja.
+// Read + normalize map.json once per request. No map at all is fine too:
+// every overlay is optional and applies as annotation only.
 async function loadMapNorm(rootAbs) {
   const raw = await readMap(rootAbs)
   return { raw, ...normalizeMap(raw) }
@@ -308,8 +309,8 @@ async function buildTree(dirAbs, rel, norm) {
     if (entry.name === '.git') continue
     if (rel === '' && entry.name === 'map.json') continue
     const childRel = rel ? `${rel}/${entry.name}` : entry.name
-    // Peta boleh menyembunyikan entri (`ignore`). Folder yang disembunyikan
-    // ikut menyembunyikan seluruh isinya: jangan disusuri sama sekali.
+    // The map may hide entries (`ignore`). A hidden folder hides its whole
+    // contents with it: never walk into it at all.
     if (norm?.entries?.get(childRel)?.ignore) continue
     const childAbs = path.join(dirAbs, entry.name)
 
@@ -344,9 +345,9 @@ async function buildTree(dirAbs, rel, norm) {
     nodes.push(decorateNode(node, norm))
   }
 
-  // Satu aturan urut, sama dengan orderForIndex di tampilan: dokumen dulu,
-  // baru folder. Bila peta menetapkan `order`, entri ber-order lebih dulu
-  // (menaik) tanpa peduli tipenya; sisanya jatuh ke aturan nama.
+  // One sort rule, same as orderForIndex in the views: documents first, then
+  // folders. When the map sets `order`, ordered entries come first (ascending)
+  // regardless of type; the rest fall back to the name rule.
   nodes.sort((a, b) => {
     const ao = a.order ?? Number.POSITIVE_INFINITY
     const bo = b.order ?? Number.POSITIVE_INFINITY
@@ -387,20 +388,20 @@ function cleanTitle(raw) {
 
 async function sendDoc(res, rootAbs, url) {
   const rel = url.searchParams.get('path')
-  if (!rel) return sendJson(res, 400, { error: 'Parameter path wajib diisi.' })
+  if (!rel) return sendJson(res, 400, { error: 'Parameter path is required.' })
 
   const abs = safeJoin(rootAbs, rel)
-  if (!abs) return sendJson(res, 400, { error: `Path di luar basis pengetahuan: ${rel}` })
+  if (!abs) return sendJson(res, 400, { error: `Path outside the knowledge base: ${rel}` })
 
   let stat
   try {
     stat = await fs.stat(abs)
   } catch {
-    return sendJson(res, 404, { error: `Berkas tidak ditemukan: ${rel}` })
+    return sendJson(res, 404, { error: `File not found: ${rel}` })
   }
-  if (stat.isDirectory()) return sendJson(res, 400, { error: `Itu folder, bukan berkas: ${rel}` })
+  if (stat.isDirectory()) return sendJson(res, 400, { error: `That is a folder, not a file: ${rel}` })
   if (stat.size > MAX_DOC_BYTES) {
-    return sendJson(res, 413, { error: `Berkas terlalu besar untuk ditampilkan (${formatBytes(stat.size)}).` })
+    return sendJson(res, 413, { error: `File too large to display (${formatBytes(stat.size)}).` })
   }
 
   const content = await fs.readFile(abs, 'utf8')
@@ -416,18 +417,18 @@ async function sendDoc(res, rootAbs, url) {
 
 async function sendRaw(res, rootAbs, url) {
   const rel = url.searchParams.get('path')
-  if (!rel) return sendJson(res, 400, { error: 'Parameter path wajib diisi.' })
+  if (!rel) return sendJson(res, 400, { error: 'Parameter path is required.' })
 
   const abs = safeJoin(rootAbs, rel)
-  if (!abs) return sendJson(res, 400, { error: `Path di luar basis pengetahuan: ${rel}` })
+  if (!abs) return sendJson(res, 400, { error: `Path outside the knowledge base: ${rel}` })
 
   let stat
   try {
     stat = await fs.stat(abs)
   } catch {
-    return sendJson(res, 404, { error: `Berkas tidak ditemukan: ${rel}` })
+    return sendJson(res, 404, { error: `File not found: ${rel}` })
   }
-  if (!stat.isFile()) return sendJson(res, 400, { error: `Bukan berkas: ${rel}` })
+  if (!stat.isFile()) return sendJson(res, 400, { error: `Not a file: ${rel}` })
 
   const type = MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream'
   res.writeHead(200, { 'Content-Type': type, 'Content-Length': stat.size, 'Cache-Control': 'no-store' })
@@ -443,7 +444,7 @@ async function sendRaw(res, rootAbs, url) {
 async function sendStatic(req, res, distAbs, pathname) {
   if (!distAbs) {
     res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' })
-    res.end('Antarmuka belum dibangun. Jalankan: npm run build')
+    res.end('UI not built yet. Run: npm run build')
     return
   }
 
@@ -453,7 +454,7 @@ async function sendStatic(req, res, distAbs, pathname) {
   let abs = safeJoin(distAbs, rel.replace(/^\/+/, ''))
   if (!abs) {
     res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
-    res.end('Akses ditolak.')
+    res.end('Access denied.')
     return
   }
 
@@ -464,14 +465,14 @@ async function sendStatic(req, res, distAbs, pathname) {
   }
 
   if (!stat || !stat.isFile()) {
-    // Tanpa ekstensi berarti permintaan rute SPA, bukan berkas hilang.
+    // No extension means an SPA route request, not a missing file.
     if (!path.extname(rel)) {
       abs = path.join(distAbs, 'index.html')
       stat = await statOrNull(abs)
     }
     if (!stat || !stat.isFile()) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
-      res.end('Berkas tidak ditemukan.')
+      res.end('File not found.')
       return
     }
   }

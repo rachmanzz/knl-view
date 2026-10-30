@@ -15,7 +15,7 @@ export function dirHref(path) {
   return `#/d/${encodePath(path)}`
 }
 
-// Rute alias: halaman bikinan sistem yang tidak punya berkas di disk.
+// Alias routes: system-made pages that have no file on disk.
 export function contentsHref() {
   return '#/a/contents'
 }

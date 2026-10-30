@@ -2,16 +2,16 @@ import { promises as fs } from 'node:fs'
 import fsSync from 'node:fs'
 import path from 'node:path'
 
-// Dua lapis config knl-view:
-// - Global: ~/.knlview/knl-config.json berisi blok "anchordb" (URL, token,
-//   sync). Koneksi itu sifatnya milik mesin/user, bukan repo, jadi semua
-//   project di mesin ini berbagi server AnchorDB yang sama.
-// - Per project: knl-config.json di project root (gitignored) berisi
-//   path/port/host dan "model". Model otomatis di-namespace menjadi
-//   "{projectname}-{model}" supaya tidak tabrakan antar project.
+// Two-layer knl-view config:
+// - Global: ~/.knlview/knl-config.json holds the "anchordb" block (URL, token,
+//   sync). That connection belongs to the machine/user, not the repo, so all
+//   projects using AnchorDB share the same server.
+// - Per project: knl-config.json at the project root (gitignored) holds
+//   path/port/host and the "models" map (role -> AnchorDB model name; names
+//   may be random, the map records what each name is for).
 //
-// File hilang atau rusak tidak boleh menjatuhkan viewer. Nilai final
-// dipilih resolveSettings dengan urutan: flag CLI > config > bawaan.
+// A missing or broken file must never bring the viewer down. Final values
+// are chosen by resolveSettings in the order: CLI flag > config > default.
 
 const PROJECT_CONFIG_FILE = 'knl-config.json'
 const GLOBAL_CONFIG_DIR = '.knlview'
@@ -21,7 +21,7 @@ const MAX_CONFIG_BYTES = 64 * 1024
 export const DEFAULT_SETTINGS = { path: '.knowledges', port: '8085', host: '127.0.0.1' }
 export const DEFAULT_MODEL = 'knowledges'
 
-// Relasi kausal yang diikuti /api/anchordb/trace bila config tidak menetapkan.
+// Causal relations /api/anchordb/trace follows when the config sets none.
 export const DEFAULT_RELATIONS = ['supersedes', 'affects_knowledge', 'depends_on']
 
 export function globalConfigPath(home = process.env.HOME) {
@@ -29,10 +29,10 @@ export function globalConfigPath(home = process.env.HOME) {
 }
 
 /**
- * Lokasi mirror edge yang terakhir tersinkron untuk satu model:
- * ~/.knlview/sync-state/<model>.json. Sync inkremental membandingkan
- * graf lokal dengan mirror ini, bukan dengan isi server (server tidak
- * menyediakan enumerasi edge via wire protocol).
+ * Location of the mirror of the last synced edges for one model:
+ * ~/.knlview/sync-state/<model>.json. Incremental sync compares the local
+ * graph against this mirror, not against the server contents (the server
+ * offers no edge enumeration over the wire protocol).
  */
 export function syncStatePath(model, home = process.env.HOME) {
   const safe = String(model || 'model').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'model'
@@ -40,7 +40,7 @@ export function syncStatePath(model, home = process.env.HOME) {
 }
 
 /**
- * Baca config global ~/.knlview/knl-config.json (blok anchordb).
+ * Read the global config ~/.knlview/knl-config.json (anchordb block).
  * @returns {Promise<{config: object|null, error: string|null}>}
  */
 export async function readGlobalConfig(home = process.env.HOME) {
@@ -48,7 +48,7 @@ export async function readGlobalConfig(home = process.env.HOME) {
 }
 
 /**
- * Baca config per project: knl-config.json di project root.
+ * Read the per-project config: knl-config.json at the project root.
  * @returns {Promise<{config: object|null, error: string|null}>}
  */
 export async function readProjectConfig(cwd = process.cwd()) {
@@ -64,24 +64,24 @@ async function readConfigFile(abs, normalize) {
   }
   if (!stat.isFile()) return { config: null, error: null }
   if (stat.size > MAX_CONFIG_BYTES) {
-    return { config: null, error: `ukuran melebihi ${MAX_CONFIG_BYTES} byte` }
+    return { config: null, error: `size exceeds ${MAX_CONFIG_BYTES} bytes` }
   }
   let parsed
   try {
     parsed = JSON.parse(await fs.readFile(abs, 'utf8'))
   } catch (err) {
-    return { config: null, error: `JSON tidak valid: ${err.message}` }
+    return { config: null, error: `invalid JSON: ${err.message}` }
   }
   return { config: normalize(parsed), error: null }
 }
 
 /**
- * Saring config project ke field yang dikenal. Nilai tidak valid dilepas
- * (bukan fatal) supaya resolveSettings jatuh ke flag CLI atau bawaan.
+ * Filter the project config down to known fields. Invalid values are dropped
+ * (not fatal) so resolveSettings falls back to the CLI flag or the default.
  *
- * `models` adalah map peran → nama model AnchorDB (nama boleh acak; peta
- * inilah yang mencatat tujuannya). Bentuk lama `model: "x"` tetap diterima
- * sebagai kependekan dari models.knowledges.
+ * `models` is the role → AnchorDB model name map (names may be random; this
+ * map is what records what each name is for). The legacy `model: "x"` shape
+ * is still accepted as shorthand for models.knowledges.
  */
 export function normalizeProjectConfig(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -103,8 +103,8 @@ const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const MODEL_ROLE_RE = /^[a-z][a-z0-9_-]*$/
 
 /**
- * Saring map models: kunci = peran (slug kecil), nilai = nama model.
- * Entri tidak valid dilepas, bukan fatal.
+ * Filter the models map: keys = roles (lowercase slugs), values = model names.
+ * Invalid entries are dropped, not fatal.
  */
 export function normalizeModels(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -119,10 +119,10 @@ export function normalizeModels(raw) {
 }
 
 /**
- * Nama model untuk satu peran, apa adanya dari map. Tidak ada namespace
- * otomatis: nama model sengaja stabil walau nama project/folder berubah.
- * Mengembalikan null bila peran belum dipetakan (pemanggil yang memberi
- * petunjuk "jalankan knl-view model new <role>").
+ * Model name for one role, verbatim from the map. No automatic namespacing:
+ * model names deliberately stay stable even when the project/folder is
+ * renamed. Returns null when the role is unmapped (the caller supplies the
+ * "run knl-view model new <role>" hint).
  */
 export function resolveModel(models, role = DEFAULT_MODEL) {
   const name = models?.[role]
@@ -130,7 +130,7 @@ export function resolveModel(models, role = DEFAULT_MODEL) {
 }
 
 /**
- * Saring config global: hanya blok anchordb yang berarti di sini.
+ * Filter the global config: only the anchordb block matters here.
  */
 export function normalizeGlobalConfig(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -139,8 +139,8 @@ export function normalizeGlobalConfig(raw) {
 }
 
 /**
- * Samakan bentuk blok anchordb: string "wire://host:port?token=..." atau
- * objek lengkap. Mengembalikan null bila tidak layak dipakai.
+ * Normalize the anchordb block shape: a "wire://host:port?token=..." string
+ * or a full object. Returns null when unusable.
  */
 export function normalizeAnchordb(raw) {
   if (typeof raw === 'string') raw = { url: raw }
@@ -152,7 +152,7 @@ export function normalizeAnchordb(raw) {
   if (token) anchordb.token = token
   const model = cleanString(raw.model)
   if (model) anchordb.model = model
-  // Hadir berarti aktif (termasuk sinkron graf saat start); sync: false untuk opt-out.
+  // Present means active (including graph sync on start); sync: false to opt out.
   anchordb.sync = raw.sync !== false
   if (Array.isArray(raw.relations)) {
     const relations = raw.relations.map((r) => cleanString(r)).filter(Boolean)
@@ -162,8 +162,8 @@ export function normalizeAnchordb(raw) {
 }
 
 /**
- * Nama project untuk catatan registry model: field "name" package.json
- * bila ada, kalau tidak nama folder project. Dibersihkan jadi slug aman.
+ * Project name for the model registry entry: the package.json "name" field
+ * when present, otherwise the project folder name. Cleaned into a safe slug.
  */
 export function projectSlug(cwd = process.cwd()) {
   let name = null
@@ -171,7 +171,7 @@ export function projectSlug(cwd = process.cwd()) {
     const parsed = JSON.parse(fsSync.readFileSync(path.join(cwd, 'package.json'), 'utf8'))
     if (typeof parsed?.name === 'string') name = parsed.name
   } catch {
-    // Tanpa package.json, nama folder project yang dipakai.
+    // Without a package.json, the project folder name is used.
   }
   if (!name || !name.trim()) name = path.basename(path.resolve(cwd))
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
@@ -179,13 +179,13 @@ export function projectSlug(cwd = process.cwd()) {
 }
 
 /**
- * Gabungkan flag CLI, config project, config global, dan bawaan.
+ * Merge CLI flags, project config, global config, and defaults.
  *
- * - path/port/host: CLI > config project > bawaan
- * - anchordb: flag --anchordb > config global; mati total bila tidak ada
- *   keduanya (project tanpa config global tidak pernah menyentuh AnchorDB)
- * - model: diambil dari map `models` config project (peran knowledges).
- *   Nama di URL (?model=) hanya dipakai bila map tidak mengisinya.
+ * - path/port/host: CLI > project config > default
+ * - anchordb: --anchordb flag > global config; fully off when neither exists
+ *   (a project without global config never touches AnchorDB)
+ * - model: taken from the project config `models` map (knowledges role).
+ *   The name in the URL (?model=) is only used when the map does not set it.
  */
 export function resolveSettings({ cli = {}, project = null, global: globalConfig = null } = {}) {
   const p = project || {}
@@ -194,7 +194,7 @@ export function resolveSettings({ cli = {}, project = null, global: globalConfig
     ? normalizeAnchordb(cli.anchordb)
     : normalizeAnchordb(g.anchordb)
 
-  // Bentuk lama "model": "x" tetap berlaku sebagai models.knowledges.
+  // Legacy "model": "x" shape still counts as models.knowledges.
   const models = { ...(p.models || {}) }
   if (!models[DEFAULT_MODEL] && typeof p.model === 'string' && p.model.trim()) {
     models[DEFAULT_MODEL] = p.model.trim()
@@ -215,8 +215,8 @@ export function resolveSettings({ cli = {}, project = null, global: globalConfig
 }
 
 /**
- * Susun opsi klien AnchorWire dari blok anchordb yang sudah di-resolve.
- * Field config menang atas nilai di query URL.
+ * Build AnchorWire client options from the already-resolved anchordb block.
+ * Config fields win over values in the URL query.
  */
 export function anchordbClientOptions(anchordb) {
   if (!anchordb?.url) return null
@@ -234,9 +234,10 @@ export function anchordbClientOptions(anchordb) {
     if (Number.isInteger(port) && port > 0 && port <= 65535) options.port = port
   }
   options.token = anchordb.token || parsed.searchParams.get('token') || ''
-  // Nama model datang dari map project (sudah di-resolve resolveSettings)
-  // atau query URL untuk sesi one-off. Sengaja tanpa default: model tanpa
-  // nama jelas tidak boleh diam-diam membuat model "knowledges" generik.
+  // The model name comes from the project map (already resolved by
+  // resolveSettings) or the URL query for a one-off session. Deliberately no
+  // default: a model with no clear name must not silently create a generic
+  // "knowledges" model.
   options.model = anchordb.model || parsed.searchParams.get('model') || ''
   return options
 }

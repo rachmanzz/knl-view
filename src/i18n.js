@@ -1,8 +1,8 @@
-// Kamus satu-satunya sumber teks Indonesia. English adalah default keras
-// (kunci berbahasa Inggris), tetapi tidak ada teks Indonesia di JSX/CSS.
-// Ganti bahasa lewat state tanpa muat ulang halaman. Pilihan bahasa hanya
-// berlaku selama sesi berjalan: buka tab baru selalu mulai dari EN,
-// tanpa membaca localStorage sama sekali.
+// Single-source dictionary for Indonesian text. English is the hard default
+// (English-language keys), but there is no Indonesian text in JSX/CSS.
+// Switch languages via state without reloading the page. The language choice
+// lasts only for the running session: a new tab always starts at EN,
+// never reading localStorage at all.
 const STRINGS = {
   en: {
     'topbar.index': 'Index',

@@ -31,61 +31,61 @@ const exec = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'))
 
-// Peran model harus slug kecil; dipakai runModelCommand (dipanggil dari
-// alur top-level, jadi dideklarasikan sebelum pemakaian).
+// Model roles must be lowercase slugs; used by runModelCommand (called from
+// the top-level flow, so declared before use).
 const MODEL_ROLE_RE = /^[a-z][a-z0-9_-]*$/
 
 const HELP = `knl-view ${pkg.version}
-Viewer lokal untuk basis pengetahuan .knowledges.
+Local viewer for the .knowledges knowledge base.
 
-Pemakaian:
+Usage:
   knl-view --port 8086 --path=.knowledges
   knl-view --init --path=.knowledges
   knl-view graph trace --target=<id> [--hops=2] [--direction=in|out|both] [--path=.knowledges]
 
-Bawaan --port/--path/--host bisa disimpan di knl-config.json di folder
-project (machine-local, gitignored). Flag CLI selalu menimpa config.
+Defaults for --port/--path/--host can be stored in knl-config.json in the
+project folder (machine-local, gitignored). CLI flags always override config.
 
-AnchorDB bersifat opsional dan dibaca dari config global
-~/.knlview/knl-config.json (URL, token, sync) sehingga semua project
-yang memakainya berbagi server yang sama. Tanpa blok itu, viewer jalan
-lokal penuh dan tidak pernah menyentuh AnchorDB. Nama model per
-project dikelola lewat map "models" di knl-config.json: peran → nama,
-nama boleh acak karena peta mencatat tujuannya. Registry global
-~/.knlview/models.json mencatat pemilik setiap nama model.
+AnchorDB is optional and read from the global config
+~/.knlview/knl-config.json (URL, token, sync) so every project using it
+shares the same server. Without that block, the viewer runs fully local
+and never touches AnchorDB. Per-project model names are managed through
+the "models" map in knl-config.json: role → name; names may be random
+because the map records what each name is for. The global registry
+~/.knlview/models.json records the owner of every model name.
 
-Perintah:
-  model new <peran>         Buat nama model acak untuk peran (mis. knowledges),
-                            tulis ke knl-config.json dan registry global
-  model check               Periksa peta model project ini dan registry global
-  install anchordb          Pasang AnchorDB: binary dari GitHub Releases di
-                            Linux; container docker/podman di platform lain
-                            (AnchorDB butuh mmap Linux)
+Commands:
+  model new <role>          Generate a random model name for a role (e.g. knowledges),
+                            write it to knl-config.json and the global registry
+  model check               Check this project's models map and the global registry
+  install anchordb          Install AnchorDB: binary from GitHub Releases on
+                            Linux; docker/podman container on other platforms
+                            (AnchorDB needs Linux mmap)
 
-Opsi:
-  --port, -p <angka>      Port HTTP (bawaan: 8085, atau knl-config.json)
-  --path <folder>         Folder basis pengetahuan (bawaan: .knowledges, atau knl-config.json)
-  --host <alamat>         Alamat bind (bawaan: 127.0.0.1, atau knl-config.json)
-  --anchordb <url>        URL AnchorWire untuk sesi ini, menimpa blok
-                          "anchordb" di knl-config.json
-  --method <metode>       Metode "install anchordb": binary | container
-  --token <teks>          Token auth untuk "install anchordb" (bawaan: acak)
-  --direction <arah>      Arah lineage "graph trace": in | out | both
-                          (bawaan: both; lihat README "Two-way lineage")
-  --target <id>           ID simpul target untuk kueri sub-graf
-  --hops <angka>          Radius hop penelusuran graf (bawaan: 2)
-  --init                  Bangun basis baru lewat wizard (tidak memulai server)
-  --structure <susunan>   Susunan saat --init non-interaktif:
-                          standard | empty | custom (bawaan: standard)
-  --folders <a,b,c>       Nama folder untuk --structure=custom
-  --seed-skill=knl-view   Tulis skill OpenCode "knl-view" (lewati bila sudah ada)
-  --dir <lokasi>          Lokasi skill: project (.agents/skills) | global
-                          (~/.config/opencode/skills). Bawaan: project
-  --yes, -y               Pakai semua jawaban bawaan, tanpa bertanya
-  --help, -h              Tampilkan bantuan ini
-  --version, -v           Tampilkan versi
+Options:
+  --port, -p <number>     HTTP port (default: 8085, or knl-config.json)
+  --path <folder>         Knowledge base folder (default: .knowledges, or knl-config.json)
+  --host <address>        Bind address (default: 127.0.0.1, or knl-config.json)
+  --anchordb <url>        AnchorWire URL for this session, overrides the
+                          "anchordb" block in knl-config.json
+  --method <method>       Method for "install anchordb": binary | container
+  --token <text>          Auth token for "install anchordb" (default: random)
+  --direction <dir>       Lineage direction for "graph trace": in | out | both
+                          (default: both; see README "Two-way lineage")
+  --target <id>           Target node id for the subgraph query
+  --hops <number>         Graph trace hop radius (default: 2)
+  --init                  Scaffold a new base via the wizard (does not start the server)
+  --structure <layout>    Layout for non-interactive --init:
+                          standard | empty | custom (default: standard)
+  --folders <a,b,c>       Folder names for --structure=custom
+  --seed-skill=knl-view   Write the OpenCode "knl-view" skill (skipped if it already exists)
+  --dir <location>        Skill location: project (.agents/skills) | global
+                          (~/.config/opencode/skills). Default: project
+  --yes, -y               Use all default answers, no prompting
+  --help, -h              Show this help
+  --version, -v           Show version
 
-Contoh:
+Examples:
   knl-view --path=../anchor-connector/.knowledges
   knl-view --port 8086 --path=.knowledges
   knl-view graph trace --target=README.md --hops=1
@@ -119,17 +119,17 @@ try {
     allowPositionals: true
   }))
 } catch (err) {
-  fail(`${err.message}\n\nJalankan "knl-view --help" untuk bantuan.`)
+  fail(`${err.message}\n\nRun "knl-view --help" for help.`)
 }
 
 if (values['seed-skill'] !== undefined && values['seed-skill'] !== 'knl-view') {
-  fail(`--seed-skill hanya mengenal "knl-view", dapat "${values['seed-skill']}".`)
+  fail(`--seed-skill only knows "knl-view", got "${values['seed-skill']}".`)
 }
 if (!['project', 'global'].includes(values.dir)) {
-  fail(`--dir harus project atau global, dapat "${values.dir}".`)
+  fail(`--dir must be project or global, got "${values.dir}".`)
 }
 if (!['standard', 'empty', 'custom'].includes(values.structure)) {
-  fail(`--structure harus standard, empty, atau custom, dapat "${values.structure}".`)
+  fail(`--structure must be standard, empty, or custom, got "${values.structure}".`)
 }
 
 if (values.help) {
@@ -141,16 +141,16 @@ if (values.version) {
   process.exit(0)
 }
 
-// Config dua lapis: project (knl-config.json) dan global (~/.knlview/).
-// File hilang tidak masalah; rusak diabaikan dengan satu peringatan di
-// stderr supaya nilai yang tidak terpakai tidak misterius.
+// Two-layer config: project (knl-config.json) and global (~/.knlview/).
+// A missing file is fine; a broken one is ignored with a single warning on
+// stderr so unused values are not a mystery.
 const { config: projectConfig, error: projectError } = await readProjectConfig()
 if (projectError) {
-  process.stderr.write(`knl-view: knl-config.json diabaikan (${projectError})\n`)
+  process.stderr.write(`knl-view: ignoring knl-config.json (${projectError})\n`)
 }
 const { config: globalConfig, error: globalError } = await readGlobalConfig()
 if (globalError) {
-  process.stderr.write(`knl-view: ~/.knlview/knl-config.json diabaikan (${globalError})\n`)
+  process.stderr.write(`knl-view: ignoring ~/.knlview/knl-config.json (${globalError})\n`)
 }
 const settings = resolveSettings({
   cli: values,
@@ -158,27 +158,27 @@ const settings = resolveSettings({
   global: globalConfig
 })
 if (values.anchordb !== undefined && !settings.anchordb) {
-  fail('--anchordb harus URL wire:// atau tcp://, contoh: --anchordb=wire://127.0.0.1:7448?token=xxx')
+  fail('--anchordb must be a wire:// or tcp:// URL, example: --anchordb=wire://127.0.0.1:7448?token=xxx')
 }
 
-// Perintah "model": kelola peta peran → nama model AnchorDB. Kode lain
-// tidak pernah menebak nama; semuanya resolve lewat peran di map ini.
+// The "model" command: manage the role → AnchorDB model name map. No other
+// code ever guesses names; everything resolves through the role in this map.
 const modelCommand = positionals?.[0] === 'model' ? positionals?.[1] : null
 if (modelCommand) {
   await runModelCommand(modelCommand, positionals?.[2], { projectConfig, settings })
   process.exit(0)
 }
 
-// Perintah "install": pasang AnchorDB (binary di Linux, container di
-// platform lain) lalu tulis blok anchordb ke config global.
+// The "install" command: install AnchorDB (binary on Linux, container on
+// other platforms) then write the anchordb block to the global config.
 if (positionals?.[0] === 'install') {
   await runInstallCommand(positionals?.[1], { values })
   process.exit(0)
 }
 
-// Daftarkan seluruh map project ke registry global (memperbarui path/
-// timestamp bila memang milik project ini) dan peringatkan nama yang
-// diklaim project lain. Registrasi lokal ini tidak butuh koneksi server.
+// Register the project's whole models map to the global registry (updating
+// path/timestamp when this project owns them) and warn about names claimed
+// by other projects. This local registration needs no server connection.
 if (settings.models) {
   for (const [role, name] of Object.entries(settings.models)) {
     const { previous, error } = await registerModel(name, {
@@ -187,9 +187,9 @@ if (settings.models) {
       cwd: process.cwd()
     })
     if (error) {
-      process.stderr.write(`knl-view: registry model diabaikan (${error})\n`)
+      process.stderr.write(`knl-view: ignoring model registry (${error})\n`)
     } else if (previous) {
-      process.stdout.write(`  peringatan: model "${name}" (${role}) juga dipakai project lain: ${previous.cwd}\n`)
+      process.stdout.write(`  warning: model "${name}" (${role}) is also used by another project: ${previous.cwd}\n`)
     }
   }
 }
@@ -228,73 +228,73 @@ if (values.init || values['seed-skill'] !== undefined) {
 
 const port = Number(settings.port)
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  fail(`--port harus angka 1-65535, dapat "${settings.port}".`)
+  fail(`--port must be a number 1-65535, got "${settings.port}".`)
 }
 
 const root = path.resolve(process.cwd(), settings.path)
 if (!fs.existsSync(root)) {
-  fail(`Folder tidak ditemukan: ${root}\nCek --path, atau jalankan dari folder project yang punya .knowledges.`)
+  fail(`Folder not found: ${root}\nCheck --path, or run from a project folder that has a .knowledges base.`)
 }
 if (!fs.statSync(root).isDirectory()) {
-  fail(`--path harus folder, bukan berkas: ${root}`)
+  fail(`--path must be a folder, not a file: ${root}`)
 }
 
 const dist = path.join(here, '..', 'dist')
 if (!fs.existsSync(path.join(dist, 'index.html'))) {
-  fail(`Antarmuka belum dibangun (${dist}).\nJalankan dulu: npm run build`)
+  fail(`UI not built yet (${dist}).\nRun first: npm run build`)
 }
 
 const server = createKnowledgeServer({ root, dist, host: settings.host, port, anchordb: settings.anchordb })
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    fail(`Port ${port} sudah dipakai proses lain.\nCoba port lain: knl-view --port ${port + 1}`)
+    fail(`Port ${port} is already in use by another process.\nTry another port: knl-view --port ${port + 1}`)
   }
-  fail(`Server gagal dijalankan: ${err.message}`)
+  fail(`Failed to start server: ${err.message}`)
 })
 
 server.listen(port, settings.host, () => {
   const addr = `http://${settings.host}:${port}`
   process.stdout.write(
     `knl-view ${pkg.version}\n` +
-      `  alamat   ${addr}\n` +
-      `  sumber   ${root}\n` +
-      `Tekan Ctrl+C untuk berhenti.\n`
+      `  address  ${addr}\n` +
+      `  source   ${root}\n` +
+      `Press Ctrl+C to stop.\n`
   )
 
   if (settings.anchordb) {
     if (!settings.anchordb.model) {
-      // Map adalah satu-satunya sumber nama model; tanpa entri, AnchorDB
-      // sengaja tidak disentuh supaya tidak muncul nama tanpa makna.
+      // The map is the only source of model names; without an entry, AnchorDB
+      // is deliberately left untouched so no meaningless name appears.
       process.stdout.write(
-        '  anchordb idle: peran "knowledges" belum dipetakan di knl-config.json\n' +
-          '    jalankan: knl-view model new knowledges\n'
+        '  anchordb idle: role "knowledges" not yet mapped in knl-config.json\n' +
+          '    run: knl-view model new knowledges\n'
       )
     } else {
       attachAnchorDB(server).then((result) => {
         if (result.ok) {
-          let line = `  anchordb terhubung (${result.model}`
+          let line = `  anchordb connected (${result.model}`
           if (result.synced) {
             if (result.failed) {
-              line += `, sync ${result.linked}+${result.unlinked} edge, ${result.failed} gagal (diulang saat start berikutnya)`
+              line += `, sync ${result.linked}+${result.unlinked} edges, ${result.failed} failed (retried on next start)`
             } else if (result.linked || result.unlinked) {
-              line += `, sync +${result.linked} -${result.unlinked} (${result.kept} edge tetap)`
+              line += `, sync +${result.linked} -${result.unlinked} (${result.kept} edges kept)`
             } else {
-              line += `, graf sudah sinkron (${result.kept} edge)`
+              line += `, graph already in sync (${result.kept} edges)`
             }
           }
           process.stdout.write(`${line})\n`)
         } else {
-          process.stdout.write(`  anchordb gagal: ${result.reason} (viewer jalan lokal saja)\n`)
+          process.stdout.write(`  anchordb failed: ${result.reason} (viewer runs local only)\n`)
         }
       })
     }
   }
 })
 
-// Wizard --init / --seed-skill. Mode tanya hanya bila stdin TTY dan tanpa
-// --yes; selain itu pakai jawaban bawaan supaya tidak pernah menggantung
-// (pipe, CI, atau skrip).
+// The --init / --seed-skill wizard. Ask mode only when stdin is a TTY and
+// no --yes is given; otherwise default answers are used so it never hangs
+// (pipe, CI, or scripts).
 async function runSetup() {
   const root = path.resolve(process.cwd(), settings.path)
   const interactive = Boolean(process.stdin.isTTY) && !values.yes
@@ -308,36 +308,36 @@ async function runSetup() {
 
     if (values.init) {
       if (rl) {
-        structure = await askChoice(rl, 'Susunan basis baru?', [
+        structure = await askChoice(rl, 'Layout for the new base?', [
           ['standard', 'Standard: README.md + roadmap/ features/ docs/'],
-          ['empty', 'Kosong: hanya folder .knowledges/'],
-          ['custom', 'Custom: tentukan folder sendiri']
+          ['empty', 'Empty: only the .knowledges/ folder'],
+          ['custom', 'Custom: pick your own folders']
         ], structure)
         if (structure === 'custom' && !folders.length) {
-          const answer = await ask(rl, 'Nama folder (pisahkan koma): ', 'roadmap, features, docs')
+          const answer = await ask(rl, 'Folder names (comma-separated): ', 'roadmap, features, docs')
           folders = answer.split(',').map((s) => s.trim()).filter(Boolean)
         }
-        seedScope = await askChoice(rl, 'Skill OpenCode knl-view?', [
-          ['none', 'Tidak usah'],
+        seedScope = await askChoice(rl, 'OpenCode knl-view skill?', [
+          ['none', 'Skip'],
           ['project', 'Project: .agents/skills/knl-view/'],
           ['global', 'Global: ~/.config/opencode/skills/knl-view/']
         ], seedScope || 'none')
         if (seedScope === 'none') seedScope = null
-        gitignore = await askYesNo(rl, 'Tambahkan .knowledges/ ke .gitignore?', true)
+        gitignore = await askYesNo(rl, 'Add .knowledges/ to .gitignore?', true)
       }
 
-      process.stdout.write(`Membangun basis di ${root} (susunan: ${structure})...\n`)
+      process.stdout.write(`Scaffolding base at ${root} (layout: ${structure})...\n`)
       const actions = await scaffoldBase({ root, structure, folders })
       report(actions)
     }
 
     if (seedScope) {
       const result = await seedSkill({ scope: seedScope, cwd: process.cwd() })
-      const lokasi = seedScope === 'global' ? 'global' : 'project'
+      const scope = seedScope === 'global' ? 'global' : 'project'
       process.stdout.write(
         result.status === 'skipped'
-          ? `  lewati   skill sudah ada: ${result.path}\n`
-          : `  buat     skill (${lokasi}): ${result.path}\n`
+          ? `  skip     skill already exists: ${result.path}\n`
+          : `  create   skill (${scope}): ${result.path}\n`
       )
     }
 
@@ -345,12 +345,12 @@ async function runSetup() {
       const result = await ensureGitignore({ cwd: process.cwd() })
       process.stdout.write(
         result.status === 'skipped'
-          ? `  lewati   .gitignore sudah menyebut .knowledges\n`
-          : `  buat     menambah .knowledges/ ke ${result.path}\n`
+          ? `  skip     .gitignore already mentions .knowledges\n`
+          : `  create   adding .knowledges/ to ${result.path}\n`
       )
     }
 
-    process.stdout.write('Selesai. Jalankan "knl-view" untuk melihat basis ini.\n')
+    process.stdout.write('Done. Run "knl-view" to view this base.\n')
   } finally {
     rl?.close()
   }
@@ -358,21 +358,21 @@ async function runSetup() {
 
 function report(actions) {
   for (const action of actions) {
-    const label = action.kind === 'dir' ? 'folder ' : 'berkas '
-    const verb = action.status === 'skipped' ? 'lewati' : 'buat   '
+    const label = action.kind === 'dir' ? 'folder ' : 'file '
+    const verb = action.status === 'skipped' ? 'skip' : 'create'
     process.stdout.write(`  ${verb} ${label}${action.path}\n`)
   }
 }
 
-// Semua pertanyaan lewat sini agar EOF (Ctrl+D) di tengah wizard berhenti
-// rapi, bukan melempar AbortError dengan stack trace.
+// All questions go through here so EOF (Ctrl+D) mid-wizard stops cleanly
+// instead of throwing an AbortError with a stack trace.
 async function ask(rl, question, fallback) {
   let answer
   try {
     answer = (await rl.question(question)).trim()
   } catch {
     process.stdout.write('\n')
-    fail('Dibatalkan.')
+    fail('Cancelled.')
   }
   return answer || fallback
 }
@@ -380,10 +380,10 @@ async function ask(rl, question, fallback) {
 async function askChoice(rl, question, choices, current) {
   process.stdout.write(`${question}\n`)
   choices.forEach(([value, label], i) => {
-    const penanda = value === current ? '>' : ' '
-    process.stdout.write(`  ${penanda} ${i + 1}. ${label}\n`)
+    const marker = value === current ? '>' : ' '
+    process.stdout.write(`  ${marker} ${i + 1}. ${label}\n`)
   })
-  const answer = await ask(rl, `Pilihan [1-${choices.length}, bawaan: ${defaultIndex(choices, current)}]: `, '')
+  const answer = await ask(rl, `Choice [1-${choices.length}, default: ${defaultIndex(choices, current)}]: `, '')
   const byNumber = Number(answer)
   if (Number.isInteger(byNumber) && byNumber >= 1 && byNumber <= choices.length) return choices[byNumber - 1][0]
   const byValue = choices.find(([value]) => value === answer)
@@ -397,19 +397,19 @@ function defaultIndex(choices, current) {
 }
 
 async function askYesNo(rl, question, fallback) {
-  const answer = (await ask(rl, `${question} (y/t) [bawaan: ${fallback ? 'y' : 't'}]: `, '')).toLowerCase()
+  const answer = (await ask(rl, `${question} (y/n) [default: ${fallback ? 'y' : 'n'}]: `, '')).toLowerCase()
   if (!answer) return fallback
-  return answer === 'y' || answer === 'ya'
+  return answer === 'y' || answer === 'yes'
 }
 
-// Perintah "install anchordb". Linux: binary dari GitHub Releases
-// (diverifikasi SHA256SUMS.txt). Platform lain: container ghcr.io —
-// AnchorDB butuh mmap Linux, jadi di macOS/Windows dia jalan di dalam
-// container Linux via docker/podman. Setelah terpasang, blok "anchordb"
-// ditulis ke config global supaya semua project langsung bisa connect.
+// The "install anchordb" command. Linux: binary from GitHub Releases
+// (verified against SHA256SUMS.txt). Other platforms: ghcr.io container;
+// AnchorDB needs Linux mmap, so on macOS/Windows it runs inside a Linux
+// container via docker/podman. After install, the "anchordb" block is
+// written to the global config so every project can connect right away.
 async function runInstallCommand(target, { values }) {
   if (target !== 'anchordb') {
-    fail(`Target install tidak dikenal: ${target || '(kosong)'}\nYang tersedia: knl-view install anchordb`)
+    fail(`Unknown install target: ${target || '(none)'}\nAvailable: knl-view install anchordb`)
   }
   const isLinux = process.platform === 'linux'
   const interactive = Boolean(process.stdin.isTTY) && !values.yes
@@ -419,30 +419,30 @@ async function runInstallCommand(target, { values }) {
   if (!method) {
     if (isLinux) {
       method = interactive
-        ? await askChoice(rl, 'Metode instalasi AnchorDB?', [
-            ['binary', 'Binary dari GitHub Releases (native Linux)'],
-            ['container', 'Container docker/podman (ghcr.io)']
+        ? await askChoice(rl, 'AnchorDB install method?', [
+            ['binary', 'Binary from GitHub Releases (native Linux)'],
+            ['container', 'docker/podman container (ghcr.io)']
           ], 'binary')
         : 'binary'
     } else {
       method = 'container'
-      process.stdout.write('AnchorDB butuh mmap Linux; di platform ini dipasang sebagai container Linux.\n')
+      process.stdout.write('AnchorDB needs Linux mmap; on this platform it is installed as a Linux container.\n')
     }
   }
   if (!['binary', 'container'].includes(method)) {
-    fail(`--method harus binary atau container, dapat "${method}".`)
+    fail(`--method must be binary or container, got "${method}".`)
   }
 
   const token = values.token || generateToken()
   const home = process.env.HOME || process.cwd()
-  // fs di modul ini API callback; langkah installer butuh versi promise.
+  // fs in this module is the callback API; installer steps need the promise version.
   const fsp = fs.promises
   let started = false
 
   try {
     if (method === 'binary') {
       if (!isLinux) {
-        fail('Metode binary hanya untuk Linux (AnchorDB butuh mmap Linux).\nGunakan --method=container.')
+        fail('The binary method is Linux-only (AnchorDB needs Linux mmap).\nUse --method=container.')
       }
       const { version } = await latestRelease()
       const asset = releaseAssetName(version)
@@ -450,15 +450,15 @@ async function runInstallCommand(target, { values }) {
       await fsp.mkdir(workdir, { recursive: true })
       const binDir = path.join(home, '.knlview', 'bin')
 
-      process.stdout.write(`Mengunduh ${asset} (v${version}) ...\n`)
+      process.stdout.write(`Downloading ${asset} (v${version}) ...\n`)
       const archive = path.join(workdir, asset)
       await downloadFile(`https://github.com/rachmanzz/anchordb/releases/download/v${version}/${asset}`, archive)
       const sums = path.join(workdir, 'SHA256SUMS.txt')
       await downloadFile(`https://github.com/rachmanzz/anchordb/releases/download/v${version}/SHA256SUMS.txt`, sums)
       await verifySha256(archive, await fsp.readFile(sums, 'utf8'))
-      process.stdout.write('  SHA256 cocok dengan SHA256SUMS.txt\n')
+      process.stdout.write('  SHA256 matches SHA256SUMS.txt\n')
 
-      process.stdout.write('Mengekstrak ...\n')
+      process.stdout.write('Extracting ...\n')
       await exec('tar', ['-xzf', archive, '-C', workdir])
       await fsp.mkdir(binDir, { recursive: true })
       for (const bin of ['anchordb-server', 'anchordb']) {
@@ -466,10 +466,10 @@ async function runInstallCommand(target, { values }) {
         await fsp.copyFile(path.join(workdir, bin), target2)
         await fsp.chmod(target2, 0o755)
       }
-      process.stdout.write(`  terpasang di ${binDir}\n`)
+      process.stdout.write(`  installed to ${binDir}\n`)
 
       const runNow = interactive
-        ? await askYesNo(rl, 'Jalankan server AnchorDB sekarang?', true)
+        ? await askYesNo(rl, 'Start the AnchorDB server now?', true)
         : true
       if (runNow) {
         const dataDir = path.join(home, '.knlview', 'anchordb-data')
@@ -490,25 +490,25 @@ async function runInstallCommand(target, { values }) {
         logFd.close()
         await waitAnchorHealth()
         started = true
-        process.stdout.write(`  server jalan (log: ${path.join(home, '.knlview', 'anchordb.log')})\n`)
+        process.stdout.write(`  server running (log: ${path.join(home, '.knlview', 'anchordb.log')})\n`)
       }
     } else {
       const runtime = await detectContainerRuntime(async (cmd) => {
         try { await exec(cmd, ['--version']); return true } catch { return false }
       })
       if (!runtime) {
-        fail('docker/podman tidak ditemukan.\nPasang dulu salah satunya: Docker Desktop (macOS/Windows) atau podman.')
+        fail('docker/podman not found.\nInstall one first: Docker Desktop (macOS/Windows) or podman.')
       }
       const { version } = await latestRelease()
       const image = `${GHCR_IMAGE}:${version}`
-      process.stdout.write(`Menarik ${image} via ${runtime} ...\n`)
+      process.stdout.write(`Pulling ${image} via ${runtime} ...\n`)
       await exec(runtime, ['pull', image])
-      process.stdout.write('  image siap\n')
+      process.stdout.write('  image ready\n')
 
-      // Nama container tetap: kalau sudah ada, pemakainya harus sadar —
-      // dihapus manual supaya data lama tidak hilang tanpa sengaja.
+      // Fixed container name: if it already exists, the user must decide;
+      // remove it manually so old data is not lost by accident.
       if (await containerExists(runtime)) {
-        fail(`Container "${CONTAINER_NAME}" sudah ada.\nHapus dulu bila memang mau dipasang ulang: ${runtime} rm -f ${CONTAINER_NAME}`)
+        fail(`Container "${CONTAINER_NAME}" already exists.\nRemove it first if you really want to reinstall: ${runtime} rm -f ${CONTAINER_NAME}`)
       }
 
       const dataDir = path.join(home, '.knlview', 'anchordb-data')
@@ -519,27 +519,27 @@ async function runInstallCommand(target, { values }) {
         '-p', `${WIRE_PORT_DEFAULT}:${WIRE_PORT_DEFAULT}`,
         '-e', `ANCHORDB_AUTH_TOKEN=${token}`,
         '-e', 'ANCHORDB_DATA_DIR=/data']
-      // Image jalan sebagai user "anchordb" (bukan root). Rootless podman
-      // memetakan uid itu ke uid host lain, lalu file data milik host user
-      // jadi tak terbaca ("permission denied"). keep-id menjalankan proses
-      // container dengan uid host user — data binary dan container bisa
-      // berbagi folder. Docker (macOS/Windows) berjalan di VM dan bind
-      // mount-nya tidak terdampak, jadi tanpa flag ini.
+      // The image runs as user "anchordb" (not root). Rootless podman maps
+      // that uid to a different host uid, so data files owned by the host
+      // user become unreadable ("permission denied"). keep-id runs the
+      // container process with the host user's uid, so binary data and the
+      // container can share the folder. Docker (macOS/Windows) runs in a VM
+      // and its bind mounts are unaffected, hence no flag here.
       if (runtime === 'podman') baseArgs.push('--userns=keep-id')
-      process.stdout.write(`Menjalankan container ...\n`)
+      process.stdout.write(`Starting container ...\n`)
       try {
         await exec(runtime, [...baseArgs, '-v', `${dataDir}:/data:Z`, image])
       } catch {
-        // Rootless/sandbox kadang menolak volume bind; tanpa volume data
-        // ikut hilang saat container dihapus — disebut apa adanya.
-        process.stdout.write('  volume tidak bisa dipasang; data efemeral di dalam container\n')
+        // Rootless/sandbox setups sometimes reject volume binds; without a
+        // volume the data dies with the container, so we say so plainly.
+        process.stdout.write('  volume could not be mounted; data is ephemeral inside the container\n')
         await exec(runtime, [...baseArgs, image])
       }
       await waitAnchorHealth()
       started = true
     }
   } catch (err) {
-    fail(`Instalasi gagal: ${err.message || err}`)
+    fail(`Install failed: ${err.message || err}`)
   }
 
   const before = await mergeGlobalAnchordb(home, {
@@ -548,23 +548,23 @@ async function runInstallCommand(target, { values }) {
     sync: true
   })
   if (before) {
-    process.stdout.write('  (blok anchordb lama di config global ditimpa; token baru diterapkan)\n')
+    process.stdout.write('  (old anchordb block in the global config overwritten; new token applied)\n')
   }
 
   process.stdout.write(
-    `\nAnchorDB siap (lapisan opsional — project tanpa blok anchordb\n` +
-      `  di config global tetap jalan lokal penuh).\n` +
-      `  HTTP   http://127.0.0.1:${HTTP_PORT_DEFAULT}/health${started ? ' (sudah respons)' : ''}\n` +
+    `\nAnchorDB ready (optional layer: projects without an anchordb block\n` +
+      `  in the global config still run fully local).\n` +
+      `  HTTP   http://127.0.0.1:${HTTP_PORT_DEFAULT}/health${started ? ' (already responding)' : ''}\n` +
       `  wire   wire://127.0.0.1:${WIRE_PORT_DEFAULT}\n` +
-      `  token  ${token.slice(0, 8)}… (lengkap di ~/.knlview/knl-config.json)\n` +
+      `  token  ${token.slice(0, 8)}... (full value in ~/.knlview/knl-config.json)\n` +
       `  config ${home}/.knlview/knl-config.json\n\n` +
-      `Langkah berikutnya (kalau project ini mau memakai sync):\n` +
-      `  1. Di project kamu: knl-view model new knowledges\n` +
-      `  2. knl-view — baris "anchordb terhubung" muncul saat graf tersinkron\n`
+      `Next steps (if this project should use sync):\n` +
+      `  1. In your project: knl-view model new knowledges\n` +
+      `  2. knl-view, the "anchordb connected" line appears once the graph is in sync\n`
   )
   if (!started) {
     process.stdout.write(
-      `  3. Server belum dijalankan; nyalakan manual:\n` +
+      `  3. Server not started yet; start it manually:\n` +
         `     ~/.knlview/bin/anchordb-server  (env: ANCHORDB_AUTH_TOKEN, ANCHORDB_DATA_DIR)\n`
     )
   }
@@ -576,11 +576,11 @@ async function waitAnchorHealth(attempts = 30) {
       const res = await fetch(`http://127.0.0.1:${HTTP_PORT_DEFAULT}/health`)
       if (res.ok) return
     } catch {
-      // belum siap, coba lagi
+      // not ready yet, retry
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
-  throw new Error(`server tidak merespons http://127.0.0.1:${HTTP_PORT_DEFAULT}/health dalam ${attempts / 2} detik — cek log anchordb`)
+  throw new Error(`server not responding at http://127.0.0.1:${HTTP_PORT_DEFAULT}/health within ${attempts / 2} seconds, check the anchordb log`)
 }
 
 async function containerExists(runtime) {
@@ -597,19 +597,19 @@ function fail(message) {
   process.exit(1)
 }
 
-// Perintah "model new" dan "model check": mengelola peta peran → nama
-// model AnchorDB. Nama boleh acak; yang memberi makna adalah peta ini
-// plus registry global ~/.knlview/models.json (pemilik setiap nama).
+// The "model new" and "model check" commands manage the role → AnchorDB
+// model name map. Names may be random; what gives them meaning is this map
+// plus the global registry ~/.knlview/models.json (owner of every name).
 
 async function runModelCommand(sub, roleArg, { projectConfig, settings }) {
   if (sub === 'new') {
     const role = (roleArg || '').trim().toLowerCase()
     if (!MODEL_ROLE_RE.test(role)) {
-      fail(`Peran harus slug kecil (huruf, angka, -, _), dapat "${roleArg || '(kosong)'}".\nContoh: knl-view model new knowledges`)
+      fail(`Role must be a lowercase slug (letters, digits, -, _), got "${roleArg || '(none)'}".\nExample: knl-view model new knowledges`)
     }
     const existing = settings.models?.[role]
     if (existing) {
-      fail(`Peran "${role}" sudah dipetakan ke model "${existing}".\nEdit knl-config.json bila memang mau diganti.`)
+      fail(`Role "${role}" is already mapped to model "${existing}".\nEdit knl-config.json if you really want to change it.`)
     }
     const name = generateModelName()
     const { previous, error } = await registerModel(name, {
@@ -617,15 +617,15 @@ async function runModelCommand(sub, roleArg, { projectConfig, settings }) {
       project: projectSlug(process.cwd()),
       cwd: process.cwd()
     })
-    if (error) fail(`Registry gagal ditulis (${error}). Nama baru tidak jadi dipakai.`)
+    if (error) fail(`Failed to write registry (${error}). The new name is not used.`)
     if (previous) {
-      fail(`Nama "${name}" sudah dipakai project lain (${previous.cwd}) untuk peran "${previous.role}".\nJalankan ulang untuk nama baru.`)
+      fail(`Name "${name}" is already used by another project (${previous.cwd}) for role "${previous.role}".\nRun again for a new name.`)
     }
     const next = { ...projectConfig, models: { ...(projectConfig?.models || {}), [role]: name } }
-    delete next.model // map menggantikan bentuk lama "model"
+    delete next.model // the map replaces the legacy "model" shape
     fs.writeFileSync(path.join(process.cwd(), 'knl-config.json'), JSON.stringify(next, null, 2) + '\n', 'utf8')
     process.stdout.write(
-      `model ${name} → peran ${role}\n` +
+      `model ${name} → role ${role}\n` +
         `  knl-config.json: models.${role} = "${name}"\n` +
         `  registry: ${modelRegistryPath()}\n`
     )
@@ -634,33 +634,32 @@ async function runModelCommand(sub, roleArg, { projectConfig, settings }) {
 
   if (sub === 'check') {
     const { models: registry, error } = await readModelRegistry()
-    if (error) process.stderr.write(`knl-view: registry diabaikan (${error})\n`)
+    if (error) process.stderr.write(`knl-view: ignoring registry (${error})\n`)
     const cwd = path.resolve(process.cwd())
     const map = settings.models || {}
     const roles = Object.keys(map)
-    process.stdout.write(`Peta model project ini (${projectSlug(cwd)}):\n`)
+    process.stdout.write(`Models map of this project (${projectSlug(cwd)}):\n`)
     if (!roles.length) {
-      process.stdout.write('  (kosong — jalankan "knl-view model new knowledges")\n')
+      process.stdout.write('  (empty, run "knl-view model new knowledges")\n')
     }
     for (const role of roles) {
       const name = map[role]
       const entry = registry[name]
-      const owner = entry ? `${entry.project}/${entry.role}` : 'belum terdaftar'
+      const owner = entry ? `${entry.project}/${entry.role}` : 'not registered'
       const clash = entry && path.resolve(entry.cwd || '') !== cwd
-      process.stdout.write(`  ${role.padEnd(12)} ${name}  (${owner}${clash ? ' — TABRAKAN: diklaim ' + entry.cwd : ''})\n`)
+      process.stdout.write(`  ${role.padEnd(12)} ${name}  (${owner}${clash ? ' - CLASH: claimed by ' + entry.cwd : ''})\n`)
     }
     const others = Object.entries(registry).filter(([, e]) => path.resolve(e.cwd || '') !== cwd)
     if (others.length) {
-      process.stdout.write('Model project lain di registry:\n')
+      process.stdout.write('Models of other projects in the registry:\n')
       for (const [name, e] of others) {
         process.stdout.write(`  ${name}  → ${e.project}/${e.role}  (${e.cwd})\n`)
       }
     }
-    process.stdout.write('Catatan: keberadaan model di server tidak bisa dicek lewat wire protocol;\n')
-    process.stdout.write('yang diperiksa di sini konsistensi peta, registry, dan kepemilikan nama.\n')
+    process.stdout.write('Note: model existence on the server cannot be checked over the wire protocol;\n')
+    process.stdout.write('what is checked here is map consistency, the registry, and name ownership.\n')
     return
   }
 
-  fail(`Perintah model tidak dikenal: ${sub || '(kosong)'}\nGunakan "model new <peran>" atau "model check".`)
+  fail(`Unknown model command: ${sub || '(none)'}\nUse "model new <role>" or "model check".`)
 }
-

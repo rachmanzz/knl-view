@@ -13,11 +13,11 @@ const root = path.resolve(process.cwd(), knowledgesPath)
 
 const api = createKnowledgeServer({ root, dist: null, port: Number(apiPort) })
 api.on('error', (err) => {
-  process.stderr.write(`dev: API gagal dijalankan: ${err.message}\n`)
+  process.stderr.write(`dev: failed to start API: ${err.message}\n`)
   process.exit(1)
 })
 api.listen(Number(apiPort), '127.0.0.1', () => {
-  process.stdout.write(`dev: API   http://127.0.0.1:${apiPort}  (sumber ${root})\n`)
+  process.stdout.write(`dev: API   http://127.0.0.1:${apiPort}  (source ${root})\n`)
 })
 
 const vite = spawn('npx', ['vite', '--port', webPort, '--strictPort'], {

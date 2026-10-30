@@ -49,14 +49,14 @@ describe('verifySha256', () => {
     const file = path.join(dir, 'anchordb.tar.gz')
     fs.writeFileSync(file, 'payload')
     const sums = `${'0'.repeat(64)}  anchordb.tar.gz`
-    await assert.rejects(() => verifySha256(file, sums), /SHA256 tidak cocok/)
+    await assert.rejects(() => verifySha256(file, sums), /SHA256 mismatch/)
   })
 
   test('rejects a file missing from the sums list', async () => {
     const dir = makeHome()
-    const file = path.join(dir, 'misterius.tar.gz')
+    const file = path.join(dir, 'mystery.tar.gz')
     fs.writeFileSync(file, 'payload')
-    await assert.rejects(() => verifySha256(file, '0'.repeat(64) + '  lain.tar.gz'), /tidak ada di SHA256SUMS/)
+    await assert.rejects(() => verifySha256(file, '0'.repeat(64) + '  other.tar.gz'), /not in SHA256SUMS/)
   })
 })
 

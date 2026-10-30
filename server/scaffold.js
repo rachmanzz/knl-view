@@ -1,32 +1,32 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
-// Pembangun basis pengetahuan untuk --init dan --seed-skill.
-// Prinsip yang sama dengan peta: TIDAK PERNAH menghancurkan apa pun yang
-// sudah ada. Berkas yang sudah ada dilewati, baris .gitignore hanya
-// ditambahkan bila belum ada.
+// Knowledge base builder for --init and --seed-skill.
+// Same principle as the map: NEVER destroy anything that already exists.
+// Existing files are skipped, and the .gitignore line is only added when
+// not already present.
 
 export const STANDARD_DIRS = ['roadmap', 'features', 'docs']
 export const SKILL_ID = 'knl-view'
 
-const ROOT_README = `# Basis Pengetahuan
+const ROOT_README = `# Knowledge Base
 
-Lede: tulis di sini ringkasan basis ini satu paragraf.
+Lede: write a one-paragraph summary of this base here.
 
-## Cara baca
+## How to read
 
-- \`roadmap/\` — arah dan rencana.
-- \`features/\` — catatan fitur.
-- \`docs/\` — dokumen umum.
+- \`roadmap/\` — direction and plans.
+- \`features/\` — feature notes.
+- \`docs/\` — general documents.
 
-Tambahkan \`map.json\` di folder ini bila ingin mengatur label menu dan
-urutan tampilan tanpa memindahkan berkas. Lihat skill \`knl-view\` untuk
-format lengkapnya.
+Add \`map.json\` to this folder if you want to control menu labels and
+display order without moving files. See the \`knl-view\` skill for the
+full format.
 `
 
 const SECTION_README = (name) => `# ${name}
 
-Belum ada isi. Taruh berkas markdown di folder ini.
+Nothing here yet. Put markdown files in this folder.
 `
 
 export async function scaffoldBase({ root, structure, folders = [] }) {
@@ -100,9 +100,10 @@ async function statOrNull(abs) {
   }
 }
 
-// Skill berbahasa Inggris sesuai konvensi ekosistem skill. Isinya mengajarkan
-// agen cara membaca basis .knowledges: README dulu, lalu map.json sebagai
-// sumber label dan urutan menu, lalu struktur mirip anchor-connector.
+// The skill is in English, following skill ecosystem conventions. It teaches
+// the agent how to read the .knowledges base: README first, then map.json as
+// the source of labels and menu order, then the anchor-connector-like
+// structure.
 const SKILL_MD = `---
 name: knl-view
 description: Read and maintain .knowledges knowledge bases. Use whenever a task involves a .knowledges folder, its map.json, or the knl-view viewer.

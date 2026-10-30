@@ -1,5 +1,5 @@
-// Model data graf terarah (Directed Graph / DAG) untuk knowledges-view.
-// Menyimpan simpul pengetahuan (Knowledge Nodes) dan simpul keputusan (Decision Nodes).
+// Directed graph (DAG) data model for knowledges-view: knowledge nodes and
+// decision nodes.
 
 export class GraphNode {
   constructor({ id, title, type = 'knowledge', path = '', metadata = {} }) {
@@ -56,7 +56,7 @@ export class DirectedGraph {
 
   addEdge(edge) {
     if (!edge || !edge.from || !edge.to) return
-    // Pastikan simpul terdaftar di outgoing/incoming maps
+    // Make sure the nodes exist in the outgoing/incoming maps
     if (!this.outgoing.has(edge.from)) this.outgoing.set(edge.from, [])
     if (!this.incoming.has(edge.to)) this.incoming.set(edge.to, [])
 

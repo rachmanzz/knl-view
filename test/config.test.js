@@ -41,7 +41,7 @@ describe('readProjectConfig', () => {
     const dir = makeDir({ 'knl-config.json': '{ "port": 8085,,' })
     const { config, error } = await readProjectConfig(dir)
     assert.equal(config, null)
-    assert.match(error, /JSON tidak valid/)
+    assert.match(error, /invalid JSON/)
   })
 
   test('valid file is normalized, including model', async () => {
@@ -180,8 +180,8 @@ describe('normalizeModels and resolveModel', () => {
     assert.equal(resolveModel(models, 'knowledges'), 'vx42k9')
     assert.equal(resolveModel(models, 'consensus'), null)
     assert.equal(resolveModel(null, 'knowledges'), null)
-    // Nama tidak pernah diubah: inilah alasan nama tetap stabil walau
-    // project/folder berganti nama.
+    // Names are never transformed: that is why names stay stable even when
+    // the project/folder is renamed.
   })
 
   test('project config accepts models map and legacy single model', async () => {
@@ -259,7 +259,7 @@ describe('resolveSettings', () => {
       project: { models: { knowledges: 'vx42k9' } }
     })
     assert.equal(settings.anchordb.url, 'wire://10.0.0.9:7448?model=fromurl')
-    // Map menang atas ?model= di URL: nama model milik project, bukan sesi.
+    // The map wins over ?model= in the URL: the model name belongs to the project, not the session.
     assert.equal(settings.anchordb.model, 'vx42k9')
   })
 

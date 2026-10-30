@@ -1,11 +1,11 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
-// Peta (map.json) opsional: murni anotasi di atas struktur disk.
-// Prinsipnya — disk itu kebenaran, peta itu overlay. Peta TIDAK PERNAH
-// mendefinisikan keberadaan berkas/folder. Berkas yang hilang dari disk
-// tetap hilang dari viewer meski peta masih menyebutnya (entri yatim
-// diabaikan diam-diam). Peta hanya menghias: judul, urutan, metadata.
+// The optional map (map.json): pure annotation on top of the disk structure.
+// Principle: the disk is the truth, the map is an overlay. The map NEVER
+// defines the existence of files/folders. A file missing from disk stays
+// missing from the viewer even when the map still lists it (orphan entries
+// are silently ignored). The map only decorates: title, order, metadata.
 
 const MAP_FILE = 'map.json'
 const MAX_MAP_BYTES = 1024 * 1024
@@ -19,17 +19,17 @@ export async function readMap(rootAbs) {
   try {
     parsed = JSON.parse(await fs.readFile(abs, 'utf8'))
   } catch {
-    // Peta rusak tidak boleh menjatuhkan viewer: abaikan dengan tenang.
+    // A broken map must never bring the viewer down: ignore it quietly.
     return null
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   return parsed
 }
 
-// Samakan bentuk: peta bisa menuliskan judul di `title` (untuk root/berkas)
-// atau `sections`/`dirs` (folder) dan `docs`/`files` (berkas). Yang penting
-// hanya satu representasi bersih yang dipakai overlay. Tiap entri boleh
-// membawa `ignore: true` untuk menyembunyikan (disk tetap punya berkasnya).
+// Normalize shapes: the map may write the title in `title` (root/files),
+// `sections`/`dirs` (folders), and `docs`/`files` (files). Only one clean
+// representation matters for the overlay. Each entry may carry
+// `ignore: true` to hide it (the disk still owns the file).
 export function normalizeMap(map) {
   if (!map) return { title: null, entries: new Map() }
   const entries = new Map()
@@ -41,9 +41,9 @@ export function normalizeMap(map) {
     mergeEntry(entries, cleanKey(key), entry)
   }
 
-  // `docs`/`files` bisa ditaruh per-folder:
-  // { "features/x": { "docs": { "a.md": {...} } } } atau global.
-  // Keduanya ditulis ke entri berkas yang sama.
+  // `docs`/`files` can be placed per folder:
+  // { "features/x": { "docs": { "a.md": {...} } } } or globally.
+  // Both are written into the same file entries.
   const globalDocs = { ...asObject(map.docs), ...asObject(map.files) }
   applyDocs(entries, '', globalDocs)
   for (const [key, value] of Object.entries(dirs)) {
@@ -81,19 +81,17 @@ function mergeEntry(entries, key, entry) {
   })
 }
 
-// Terapkan overlay ke satu simpul. Mengembalikan simpul baru (tanpa merusak
-// objek asli dari disk), atau simpul yang sama kalau peta tidak menyentuhnya.
-// Terapkan overlay ke satu simpul. Mengembalikan simpul baru (tanpa merusak
-// objek asli dari disk), atau simpul yang sama kalau peta tidak menyentuhnya.
+// Apply the overlay to one node. Returns a new node (without corrupting the
+// original object from disk), or the same node when the map does not touch it.
 export function decorateNode(node, norm) {
   const entry = norm?.entries?.get(node.path)
   let next = node
 
   const title = entry?.title
   if (title) {
-    // Judul peta mengalahkan judul heading yang dibaca dari isi berkas.
-    // `titleFromMap` menandai bahwa label ini datang dari peta, sehingga
-    // tampilan boleh memakainya langsung sebagai label (bukan sekadar sub).
+    // A map title beats the heading title read from the file contents.
+    // `titleFromMap` marks that this label came from the map, so the view
+    // may use it directly as the label (not just as a subtitle).
     next = { ...next, title, titleFromMap: true }
   }
   const order = entry?.order
@@ -101,8 +99,8 @@ export function decorateNode(node, norm) {
   const meta = entry?.meta
   if (meta != null) next = { ...next, meta }
 
-  // Anak-anak sudah dihias sendiri oleh buildTree saat menyusuri disk,
-  // jadi di sini cukup menyentuh simpul ini saja.
+  // Children are already decorated by buildTree while walking the disk,
+  // so here it is enough to touch this node only.
   return next
 }
 

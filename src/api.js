@@ -6,7 +6,7 @@ async function getJson(url) {
       const body = await res.json()
       if (body?.error) message = body.error
     } catch {
-      // Balasan bukan JSON: pesan HTTP sudah cukup.
+      // The reply is not JSON: the HTTP message is enough.
     }
     throw new Error(message)
   }

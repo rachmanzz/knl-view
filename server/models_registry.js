@@ -2,12 +2,12 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 
-// Registry global nama model AnchorDB: ~/.knlview/models.json.
+// Global registry of AnchorDB model names: ~/.knlview/models.json.
 //
-// Nama model boleh acak; yang membuat nama acak itu bermakna adalah
-// registry ini — pemetaan nama → project, peran, dan lokasi project.
-// Kode knl-view tidak pernah menebak nama model: ia hanya tahu peran
-// (knowledges, consensus, dst.) dan membaca perannya dari map project.
+// Model names may be random; what makes a random name meaningful is this
+// registry: the mapping of name → project, role, and project location.
+// knl-view code never guesses model names: it only knows roles (knowledges,
+// consensus, etc.) and reads each role from the project map.
 
 const REGISTRY_FILE = 'models.json'
 
@@ -16,8 +16,8 @@ export function modelRegistryPath(home = process.env.HOME) {
 }
 
 /**
- * Nama acak untuk model: 8 karakter Crockford base32 (tanpa I, L, O, U
- * supaya tidak rancu saat dibaca/diketik manusia).
+ * Random name for a model: 8 Crockford base32 characters (no I, L, O, U
+ * so humans never misread/mistype them).
  */
 export function generateModelName() {
   const alphabet = '0123456789abcdefghjkmnpqrstvwxyz'
@@ -28,14 +28,14 @@ export function generateModelName() {
 }
 
 /**
- * Baca registry. File hilang/rusak = registry kosong, bukan error.
+ * Read the registry. Missing/broken file = empty registry, not an error.
  * @returns {Promise<{models: object, error: string|null}>}
  */
 export async function readModelRegistry(home = process.env.HOME) {
   try {
     const parsed = JSON.parse(await fs.readFile(modelRegistryPath(home), 'utf8'))
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { models: {}, error: 'isi registry bukan objek' }
+      return { models: {}, error: 'registry contents are not an object' }
     }
     const models = {}
     for (const [name, entry] of Object.entries(parsed)) {
@@ -51,9 +51,9 @@ export async function readModelRegistry(home = process.env.HOME) {
 }
 
 /**
- * Daftarkan (atau perbarui) satu model di registry. Mengembalikan pemilik
- * sebelumnya bila nama sudah diklaim project lain — pemanggil yang
- * memutuskan mau memperingatkan atau tidak.
+ * Register (or update) one model in the registry. Returns the previous owner
+ * when the name is already claimed by another project; the caller decides
+ * whether to warn.
  * @returns {Promise<{previous: object|null, written: boolean, error: string|null}>}
  */
 export async function registerModel(name, { role, project, cwd }, home = process.env.HOME) {

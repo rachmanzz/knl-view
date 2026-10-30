@@ -1,8 +1,8 @@
 import { marked } from 'marked'
 import { docHref, dirHref } from './router.js'
 
-// Konten .knowledges datang dari disk, tapi tetap dilewati whitelist agar
-// berkas berisi HTML mentah tidak bisa menaruh skrip atau pengendali di viewer.
+// .knowledges content comes from disk, but it still passes a whitelist so
+// a file containing raw HTML cannot plant scripts or handlers in the viewer.
 const KEEP_TAGS = new Set([
   'P', 'BR', 'HR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
   'UL', 'OL', 'LI', 'PRE', 'CODE', 'BLOCKQUOTE',
@@ -70,7 +70,7 @@ export function scrollToId(id) {
 export function handleMarkdownClick(event) {
   const jump = event.target.closest?.('a[data-jump]')
   if (jump) {
-    // Rute berganti dulu; DocView menarik anchor setelah dokumen baru terpasang.
+    // The route changes first; DocView pulls the anchor after the new document mounts.
     setPendingAnchor(jump.getAttribute('data-jump'))
     return
   }
@@ -124,7 +124,7 @@ function assignHeadingIds(root) {
       .normalize('NFKD')
       .replace(/[^\p{L}\p{N}]+/gu, '-')
       .replace(/^-+|-+$/g, '')
-    if (!base) base = 'bagian'
+    if (!base) base = 'section'
     if (base.length > 72) base = base.slice(0, 72).replace(/-+$/, '')
 
     const seen = used.get(base) || 0
@@ -221,7 +221,7 @@ function resolveImages(root, { baseDir, files, parsed }) {
 
 function replaceWithPlaceholder(img, parsed) {
   const alt = (img.getAttribute('alt') || '').trim()
-  const text = alt ? `[gambar tidak ditemukan: ${alt}]` : '[gambar tidak ditemukan]'
+  const text = alt ? `[image not found: ${alt}]` : '[image not found]'
   img.replaceWith(parsed.createTextNode(text))
 }
 

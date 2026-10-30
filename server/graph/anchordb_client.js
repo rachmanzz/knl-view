@@ -1,13 +1,14 @@
 import { connectWire } from '@rahmantech/anchorwire'
 
 /**
- * Modul jembatan opsional ke backend AnchorDB via protokol AnchorWire (wire://).
- * Mematuhi prinsip KISS: hanya aktif jika dikonfigurasikan, dengan fallback graceful.
+ * Optional bridge module to the AnchorDB backend via the AnchorWire protocol
+ * (wire://). Follows the KISS principle: active only when configured, with
+ * graceful fallback.
  */
 
 /**
- * Membuka koneksi klien AnchorWire.
- * @param {string|object} urlOrOptions - Contoh: 'wire://127.0.0.1:7448?model=knowledges'
+ * Open an AnchorWire client connection.
+ * @param {string|object} urlOrOptions - Example: 'wire://127.0.0.1:7448?model=knowledges'
  */
 export async function createAnchorWireClient(urlOrOptions) {
   try {
@@ -17,24 +18,24 @@ export async function createAnchorWireClient(urlOrOptions) {
     const target = typeof urlOrOptions === 'string'
       ? urlOrOptions
       : `${urlOrOptions?.host || '?'}:${urlOrOptions?.port || '?'}`
-    throw new Error(`Gagal terhubung ke AnchorDB (${target}): ${err.message}`)
+    throw new Error(`Failed to connect to AnchorDB (${target}): ${err.message}`)
   }
 }
 
 /**
- * Kunci stabil satu edge untuk diff dan mirror: "from\x00type\x00to".
- * NUL dipakai karena tidak mungkin muncul di ID markdown yang sehat.
+ * Stable key for one edge, for diffing and the mirror: "from\x00type\x00to".
+ * NUL is used because it cannot appear in healthy markdown IDs.
  */
 export function edgeKey(from, type, to) {
   return `${from}\u0000${type}\u0000${to}`
 }
 
 /**
- * Kumpulkan set edge unik dari DirectedGraph. Edge ganda di markdown
- * (satu keputusan menulis supersedes dua kali, misalnya) cukup dikirim
- * satu kali ke server.
+ * Collect the set of unique edges from a DirectedGraph. Duplicate edges in
+ * markdown (one decision writing supersedes twice, say) only need to be sent
+ * to the server once.
  * @param {import('./model.js').DirectedGraph} graph
- * @returns {string[]} kunci edge terurut
+ * @returns {string[]} sorted edge keys
  */
 export function edgesOfGraph(graph) {
   const set = new Set()
@@ -45,10 +46,10 @@ export function edgesOfGraph(graph) {
 }
 
 /**
- * Diff dua set edge: apa yang harus dikirim link dan unlink.
- * @param {string[]} desired - edge yang seharusnya ada (graf lokal kini)
- * @param {string[]|null} previous - edge menurut mirror sinkron terakhir;
- *   null berarti tidak ada mirror (server dianggap kosong → full link)
+ * Diff two edge sets: what must be sent as link and unlink.
+ * @param {string[]} desired - edges that should exist (the current local graph)
+ * @param {string[]|null} previous - edges per the last sync mirror;
+ *   null means no mirror (the server is assumed empty → full link)
  * @returns {{toLink: string[], toUnlink: string[]}}
  */
 export function diffEdges(desired, previous) {
@@ -66,11 +67,12 @@ function isEdgeNotFound(err) {
 }
 
 /**
- * Cek murah apakah server masih mengenali satu edge sampel dari mirror.
- * Kalau target edge sampel tidak muncul dari causalChain, server dianggap
- * sudah berbeda (dipasang ulang, di-wipe, model direset) dan mirror harus
- * dibuang supaya sync jadi full link. Link memang upsert, jadi full link
- * selalu aman; yang berbahaya justru percaya mirror pada server kosong.
+ * Cheap check that the server still recognizes one sample edge from the
+ * mirror. If the sample edge does not show up in causalChain, the server is
+ * considered different (reinstalled, wiped, model reset) and the mirror must
+ * be discarded so the sync becomes a full link. Link is an upsert, so a full
+ * link is always safe; what is dangerous is trusting a mirror against an
+ * empty server.
  */
 async function mirrorStillValid(client, previousEdges) {
   if (!Array.isArray(previousEdges) || previousEdges.length === 0) return Boolean(previousEdges)
@@ -84,22 +86,22 @@ async function mirrorStillValid(client, previousEdges) {
 }
 
 /**
- * Menyinkronkan graf ke AnchorDB secara INKREMENtal: hanya edge baru yang
- * di-link, edge yang hilang dari markdown di-unlink, sisanya dibiarkan.
- * Server tidak menyediakan enumerasi edge, jadi pembandingnya adalah
- * mirror hasil sync terakhir (`previousEdges` dari sync-state lokal) —
- * dan mirror diverifikasi dengan satu probe causal sebelum dipercaya.
+ * Sync the graph to AnchorDB INCREMENTALLY: only new edges are linked, edges
+ * missing from markdown are unlinked, the rest are left alone. The server
+ * offers no edge enumeration, so the comparator is the mirror of the last
+ * sync (`previousEdges` from the local sync-state), and the mirror is
+ * verified with one causal probe before being trusted.
  *
- * Unlink ke edge yang sudah tidak ada di server diperlakukan sebagai
- * berhasil (kasus: container/server dipasang ulang tapi mirror masih ada).
+ * Unlinking an edge that no longer exists on the server is treated as
+ * success (case: the container/server was reinstalled but the mirror remains).
  *
  * @param {import('@rahmantech/anchorwire').AnchorWireClient} client
  * @param {import('./model.js').DirectedGraph} graph
- * @param {string[]|null} previousEdges - mirror sync terakhir (null = full sync)
+ * @param {string[]|null} previousEdges - mirror of the last sync (null = full sync)
  * @returns {Promise<{linked: number, unlinked: number, kept: number, failed: number, edges: string[]}>}
- *   `edges` = set edge penuh pasca-sync, untuk ditulis ke mirror BILA
- *   `failed === 0`. Kegagalan sebagian tidak menulis mirror supaya start
- *   berikutnya mengulang bagian yang gagal.
+ *   `edges` = the full edge set after the sync, to be written to the mirror
+ *   ONLY when `failed === 0`. On partial failure the mirror is not written so
+ *   the next start retries the failed part.
  */
 export async function syncGraphToAnchorDB(client, graph, previousEdges = null) {
   if (!client || !graph) return { linked: 0, unlinked: 0, kept: 0, failed: 0, edges: [] }
@@ -129,8 +131,8 @@ export async function syncGraphToAnchorDB(client, graph, previousEdges = null) {
       await client.unlink(from, type, to)
       unlinked += 1
     } catch (err) {
-      // Edge sudah tidak ada di server: hasil akhirnya sama dengan yang
-      // kita mau, jadi dihitung berhasil.
+      // The edge no longer exists on the server: the end state equals what
+      // we want, so it counts as success.
       if (isEdgeNotFound(err)) unlinked += 1
       else failed += 1
     }
@@ -140,23 +142,23 @@ export async function syncGraphToAnchorDB(client, graph, previousEdges = null) {
 }
 
 /**
- * Menelusuran rantai kausal multi-hop terdistribusi di server AnchorDB.
+ * Distributed multi-hop causal chain trace on the AnchorDB server.
  *
- * Klien AnchorWire memakai array relasi sebagai RANTAI hop berurutan (hop
- * kedua lewat relasi kedua), bukan "salah satu dari". Untuk graf pengetahuan
- * yang mau kita telusuri UNION relasi (DEC --supersedes--> X atau
- * --affects_knowledge--> Y), tiap relasi ditelusuri sendiri per hop lalu
- * digabung: dedupe per simpul, skor tertinggi menang, skor hop selanjutnya
- * dikalikan skor orang tuanya.
+ * The AnchorWire client uses a relations array as an ORDERED CHAIN of hops
+ * (the second hop goes through the second relation), not "any one of". For
+ * the knowledge graphs we want to trace a UNION of relations (DEC
+ * --supersedes--> X or --affects_knowledge--> Y), each relation is traced
+ * separately per hop and then merged: dedupe per node, highest score wins,
+ * and each next hop's score is multiplied by its parent's.
  *
  * @param {import('@rahmantech/anchorwire').AnchorWireClient} client
- * @param {string} seedId - ID simpul pusat kueri
- * @param {string|string[]} relations - Relasi yang diikuti (misal: ['supersedes', 'affects_knowledge', 'depends_on'])
- * @param {number} limitK - Batas hasil per panggilan server
- * @param {number} maxHops - Radius hop penelusuran
+ * @param {string} seedId - id of the center node of the query
+ * @param {string|string[]} relations - relations to follow (e.g. ['supersedes', 'affects_knowledge', 'depends_on'])
+ * @param {number} limitK - result limit per server call
+ * @param {number} maxHops - trace hop radius
  */
 export async function traceCausalChain(client, seedId, relations = ['supersedes', 'affects_knowledge', 'depends_on'], limitK = 20, maxHops = 2) {
-  if (!client) throw new Error('AnchorWire client tidak tersedia.')
+  if (!client) throw new Error('AnchorWire client unavailable.')
   const rels = (Array.isArray(relations) ? relations : [relations]).filter(Boolean)
   if (!rels.length) return []
 

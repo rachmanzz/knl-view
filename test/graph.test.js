@@ -121,7 +121,7 @@ references: [docs/security.md]
 ---
 # Authentication Architecture
 
-Sistem ini memakai auth token. Lihat juga [User Profile](features/profile.md).
+This system uses auth tokens. See also [User Profile](features/profile.md).
 `
     const { node, edges } = parseKnowledgeContent('features/auth.md', sampleMd)
     assert.equal(node.id, 'features/auth.md')
@@ -148,11 +148,11 @@ Sistem ini memakai auth token. Lihat juga [User Profile](features/profile.md).
 
 ### Decision
 
-Gunakan AnchorDB sebagai embedded in-memory graph engine.
+Use AnchorDB as the embedded in-memory graph engine.
 
 ### Rationale
 
-Mendukung traversal multi-hop dan causal chain.
+It supports multi-hop traversal and causal chains.
 <!-- decision:end -->
 `
     const { nodes, edges } = parseDecisionBlocks('decisions/2026-10.md', sampleDecisionMd)
@@ -175,7 +175,7 @@ Mendukung traversal multi-hop dan causal chain.
     const knlDir = path.join(rootDir, '.knowledges')
     const graph = await buildGraphFromRoot(knlDir)
     assert.ok(graph.nodes.size > 0)
-    // Cek bahwa setidaknya README.md terbaca
+    // Check that at least README.md was read
     const readme = graph.getNode('README.md')
     assert.ok(readme)
     assert.equal(readme.type, 'knowledge')
@@ -239,7 +239,7 @@ describe('CLI Graph Trace (Zero-File Intermediary)', () => {
     assert.ok(Array.isArray(subGraph.nodes))
     assert.ok(Array.isArray(subGraph.edges))
 
-    // Pastikan tidak ada berkas perantara graph.json yang tercipta di disk
+    // Make sure no intermediary graph.json file is created on disk
     const outGraph = path.join(knlDir, 'graph.json')
     assert.ok(!fs.existsSync(outGraph))
   })
@@ -321,12 +321,12 @@ describe('Incremental Sync', () => {
     assert.equal(second.unlinked, 0)
     assert.equal(second.kept, 2)
     assert.equal(second.failed, 0)
-    assert.equal(client.calls.linked.length, 2) // tidak ada link ulang
+    assert.equal(client.calls.linked.length, 2) // nothing re-linked
   })
 
   test('removed markdown edges get unlinked, tolerating edge not found', async () => {
     const client = fakeClient(new Set([E('A', 'supersedes', 'B'), E('OLD', 'r', 'GONE')]))
-    const graph = makeGraph([['A', 'supersedes', 'B']]) // OLD hilang dari markdown
+    const graph = makeGraph([['A', 'supersedes', 'B']]) // OLD is gone from the markdown
     const previous = [E('A', 'supersedes', 'B'), E('OLD', 'r', 'GONE')]
 
     const result = await syncGraphToAnchorDB(client, graph, previous)
@@ -336,15 +336,15 @@ describe('Incremental Sync', () => {
   })
 
   test('server wiped fresh: probe rejects stale mirror, full link instead', async () => {
-    // Server kosong (container baru), mirror masih menandai dua edge lama.
-    // Probe causal tidak menemukan edge sampel → mirror dibuang → full link.
+    // Empty server (fresh container), the mirror still lists two old edges.
+    // The causal probe does not find the sample edge → the mirror is discarded → full link.
     const client = fakeClient(new Set())
     const graph = makeGraph([['A', 'supersedes', 'B']])
     const previous = [E('A', 'supersedes', 'B'), E('OLD', 'r', 'GONE')]
 
     const result = await syncGraphToAnchorDB(client, graph, previous)
     assert.equal(result.linked, 1)
-    assert.equal(result.unlinked, 0) // tidak ada unlink: mirror dianggap tidak sah
+    assert.equal(result.unlinked, 0) // no unlink: the mirror is considered invalid
     assert.equal(result.failed, 0)
     assert.deepEqual(result.edges, [E('A', 'supersedes', 'B')])
   })
@@ -421,7 +421,7 @@ describe('AnchorWire Client Integration', () => {
         await createAnchorWireClient({ host: '127.0.0.1', port: 59999, connectTimeoutMs: 300 })
       },
       (err) => {
-        assert.ok(err.message.includes('Gagal terhubung ke AnchorDB'))
+        assert.ok(err.message.includes('Failed to connect to AnchorDB'))
         return true
       }
     )

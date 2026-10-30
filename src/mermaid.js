@@ -1,15 +1,15 @@
 import { t, onLangChange } from './i18n.js'
 
-// Fence ```mermaid di dalam .md dirender jadi diagram SVG.
-// Modul mermaid dimuat malas: hanya diunduh saat ada fence mermaid,
-// supaya bundel utama tetap kecil untuk basis tanpa diagram.
+// A ```mermaid fence inside .md is rendered as an SVG diagram.
+// The mermaid module is lazy-loaded: it is only downloaded when a mermaid
+// fence exists, keeping the main bundle small for bases without diagrams.
 
 let mermaidPromise = null
 let uid = 0
 let activeModal = null
 
-// Pasangan warna node flowchart: isian pastel pucat + tepi terang bergantian,
-// sesuai palet mermaut di tangkapan layar rujukan (merah muda, biru muda, dst).
+// Flowchart node color pairs: pale pastel fill + alternating bright border,
+// matching the mermaid palette in the reference screenshot (pink, light blue, etc).
 const NODE_PALETTE = [
   { fill: '#FDF4FF', border: '#E879F9' },
   { fill: '#F0FDFA', border: '#2DD4BF' },
@@ -24,9 +24,9 @@ const FLOWCHART_STOP = new Set([
   'accTitle', 'accDescr', 'LR', 'RL', 'TD', 'TB', 'BT',
 ])
 
-// Kumpulkan id node flowchart dari sumber. Komentar, label, dan string dibuang
-// dulu supaya hanya id yang tersisa; id tak dikenal mermaid abaikan diam-diam
-// saat direktif `class`, jadi ekstraksi longgar ini aman.
+// Collect flowchart node ids from the source. Comments, labels, and strings
+// are stripped first so only ids remain; mermaid quietly ignores unknown ids
+// in a `class` directive, so this loose extraction is safe.
 function flowchartNodeIds(src) {
   const cleaned = src
     .replace(/%%[^\n]*/g, ' ')
@@ -49,9 +49,9 @@ function flowchartNodeIds(src) {
   return ids
 }
 
-// Sematkan pewarnaan node flowchart tanpa mengubah sumber yang ditampilkan.
-// Hanya flowchart yang diwarnai; diagram lain (sequence, class, dst) sudah
-// diwarnai temanya sendiri.
+// Embed flowchart node coloring without changing the displayed source.
+// Only flowcharts are colored; other diagrams (sequence, class, etc) are
+// already colored by their own theme.
 function withNodeColors(src) {
   if (!/^\s*(?:flowchart|graph)\b/m.test(src)) return src
   const ids = flowchartNodeIds(src)
@@ -72,8 +72,8 @@ function loadMermaid() {
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'strict',
-        // Tema warna-warni mermaut: isian pastel pucat + tepi terang bergantian,
-        // tinta gelap, sudut membulat, bayangan lembut, jarak node/rank lega.
+        // Mermaid colorful theme: pale pastel fill + alternating bright border,
+        // dark ink, rounded corners, soft shadow, roomy node/rank spacing.
         theme: 'redux-color',
         themeVariables: {
           fontFamily: 'Helvetica, Arial, sans-serif',
@@ -94,7 +94,7 @@ export function renderMermaid(root) {
   if (!root || typeof document === 'undefined') return
   const pending = [...root.querySelectorAll('code.language-mermaid:not([data-mermaid])')]
   if (!pending.length) return
-  // Tandai dulu sebelum await: efek ganda (StrictMode, render ulang) tidak boleh menggandakan kerja.
+  // Mark first, before await: double effects (StrictMode, re-render) must not duplicate work.
   for (const code of pending) code.dataset.mermaid = 'pending'
   void renderAll(pending)
 }
@@ -109,7 +109,7 @@ async function renderAll(codes) {
   }
 
   for (const code of codes) {
-    // DOM sudah diganti React selesai dirender; efek berikutnya akan memproses node baru.
+    // React has swapped the DOM by the time rendering finished; the next effect will process the new nodes.
     if (!code.isConnected) continue
     const pre = code.closest('pre')
     if (!pre) continue
@@ -118,7 +118,7 @@ async function renderAll(codes) {
 
     let svg = ''
     try {
-      // Sumber berwarna hanya untuk render; tampilan "Show source" tetap asli.
+      // Colored source is for rendering only; the "Show source" view stays original.
       svg = (await mermaid.render(id, withNodeColors(source))).svg
     } catch {
       try {
@@ -175,7 +175,7 @@ async function renderAll(codes) {
   }
 }
 
-// Syntax error: biarkan blok kode apa adanya, tambah catatan kecil.
+// Syntax error: leave the code block as is, add a small note.
 function failNote(code) {
   const pre = code.closest('pre')
   code.dataset.mermaid = 'error'
@@ -186,8 +186,8 @@ function failNote(code) {
   pre.before(note)
 }
 
-// --- Modal zoom: satu diagram diperbesar di layar penuh, scroll untuk zoom,
-// --- tarik untuk geser, tombol +/−/Reset sebagai kontrol sentuh/klik. ---
+// --- Zoom modal: one diagram enlarged full-screen, scroll to zoom,
+// --- drag to pan, +/−/Reset buttons as touch/click controls. ---
 
 function openZoom(diagram, trigger) {
   closeZoom()
@@ -221,8 +221,8 @@ function openZoom(diagram, trigger) {
     scaleLabel.textContent = `${Math.round(scale * 100)}%`
   }
 
-  // Zoom di sekitar titik (mx, my) relatif terhadap panggung: titik di bawah
-  // kursor tetap berada di posisi yang sama saat skala berubah.
+  // Zoom around the point (mx, my) relative to the stage: the point under
+  // the cursor stays in the same place while the scale changes.
   const zoomAt = (mx, my, factor) => {
     const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * factor))
     const k = next / scale
@@ -287,12 +287,12 @@ function openZoom(diagram, trigger) {
   stage.addEventListener('pointerup', stopDrag)
   stage.addEventListener('pointercancel', stopDrag)
 
-  // Klik latar gelap menutup; klik panggung (geser) tidak.
+  // Clicking the backdrop closes; clicking the stage (panning) does not.
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) closeZoom()
   })
 
-  // Jebakan fokus: Tab hanya berputar di tombol toolbar.
+  // Focus trap: Tab only cycles through the toolbar buttons.
   backdrop.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return
     const buttons = [...bar.querySelectorAll('button')]
@@ -355,7 +355,7 @@ function closeZoom() {
   activeModal = null
 }
 
-// Elemen mermaid dibuat di luar React, jadi labelnya disinkronkan manual saat bahasa berganti.
+// Mermaid elements are created outside React, so their labels are synced manually when the language changes.
 if (typeof document !== 'undefined') {
   onLangChange(() => {
     for (const figure of document.querySelectorAll('.mermaid-block')) {

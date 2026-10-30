@@ -1,9 +1,9 @@
 import { t } from './i18n.js'
 
-// Satu tempat untuk label tampilan. Aturannya:
-// - disk menentukan keberadaan, peta boleh mengganti label (`title`);
-// - README adalah `index` di mana pun ia berada;
-// - ekstensi `.md` tidak ditampilkan (ekstensi lain tetap, mis. `.prd`).
+// One place for display labels. Its rules:
+// - the disk decides existence, the map may replace the label (`title`);
+// - README is `index` wherever it lives;
+// - the `.md` extension is not shown (other extensions stay, e.g. `.prd`).
 export function displayLabel(node) {
   if (!node) return ''
   if (node.type === 'dir') return node.title || node.name
@@ -13,8 +13,8 @@ export function displayLabel(node) {
   return /\.md$/i.test(name) ? name.replace(/\.md$/i, '') : name
 }
 
-// Baris kedua (judul heading) hanya berguna kalau label utamanya bukan
-// judul itu sendiri. Judul dari peta sudah jadi label, jadi jangan diulang.
+// The second line (heading title) is only useful when the main label is not
+// that title itself. A title from the map is already the label, so no repeat.
 export function displaySub(node) {
   if (!node || node.type === 'dir') return null
   if (!node.title || node.titleFromMap) return null
