@@ -23,7 +23,7 @@ import {
 } from '../server/consensus.js'
 import { readProjectConfig, readGlobalConfig, projectSlug, anchordbClientOptions, resolveModel, resolveSettings, DEFAULT_MODEL } from '../server/config.js'
 import { createAnchorWireClient, mirrorStillValid } from '../server/graph/anchordb_client.js'
-import { syncSourcesToAnchorDB, traceSources } from '../server/graph/sources.js'
+import { syncSourcesToAnchorDB, traceSources, purgeArchivedRecords } from '../server/graph/sources.js'
 import { readModelRegistry, registerModel, generateModelName, modelRegistryPath } from '../server/models_registry.js'
 import {
   latestRelease,
@@ -87,6 +87,8 @@ Commands:
   sources sync              Sync the whole-project dependency graph (file
                             nodes + import edges) into the AnchorDB
                             "sources" model; server-authoritative, no mirror
+  sources collect           Purge archived (tombstoned) records of the
+                            "sources" model via the REST collector
   sources trace --target=<path>  File lineage over the sources graph
                             (--hops, --direction in|out|both)
 
@@ -809,6 +811,15 @@ async function runSourcesCommand(sub, values, { settings }) {
     if (result.failed) {
       process.stderr.write('knl-view: some operations failed; run "knl-view sources sync" again to retry.\n')
     }
+    if (result.tombstoned) {
+      await runSourcesCollector(base, sourcesModel, { quiet: false })
+    }
+    return
+  }
+
+  if (sub === 'collect') {
+    const purged = await runSourcesCollector(base, sourcesModel, { quiet: false })
+    if (!purged) process.stdout.write('nothing to purge: no archived records for this model\n')
     return
   }
 
@@ -840,7 +851,25 @@ async function runSourcesCommand(sub, values, { settings }) {
   fail('Unknown sources subcommand.\n' +
     'Usage:\n' +
     '  knl-view sources sync\n' +
+    '  knl-view sources collect\n' +
     '  knl-view sources trace --target=<repo-relative path> [--hops=2] [--direction=in|out|both]')
+}
+
+// Tombstoned records are hidden by the server but stay in storage until the
+// collector purges them, and collector jobs only start over HTTP. Best
+// effort: a missing or firewalled REST endpoint must not fail a sync, it
+// only postpones the physical purge.
+async function runSourcesCollector(base, model, { quiet }) {
+  try {
+    const purged = await purgeArchivedRecords(`wire://${base.host}:${base.port}`, base.token, model)
+    if (purged) process.stdout.write(`  collector purged ${purged} archived record${purged === 1 ? '' : 's'}\n`)
+    else if (!quiet) process.stdout.write('  collector ran: nothing to purge\n')
+    return purged
+  } catch (err) {
+    process.stderr.write(`knl-view: collector unavailable (${err.message}); archived records stay hidden until collected.\n` +
+      '  Run "knl-view sources collect" once the REST endpoint is reachable.\n')
+    return 0
+  }
 }
 
 function fail(message) {

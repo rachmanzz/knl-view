@@ -16,6 +16,8 @@ import {
   writeLabelFiles,
   syncSourcesToAnchorDB,
   traceSources,
+  collectorHttpUrl,
+  purgeArchivedRecords,
   SOURCE_RELATIONS,
   SYMBOL_RELATIONS
 } from '../server/graph/sources.js'
@@ -345,18 +347,19 @@ describe('syncSourcesToAnchorDB', () => {
   // state, so several syncs run against the same "server" like in real use.
   function statefulClient() {
     const records = new Map()
+    const operations = new Map()
     const edges = new Map()
     const ops = { linked: [], unlinked: [], saved: [], batches: [] }
     return {
       ops,
       records,
+      operations,
       edges,
       async list() {
-        return {
-          totalCount: records.size,
-          hasMore: false,
-          items: [...records].map(([name, props]) => ({ name, props }))
-        }
+        const items = [...records]
+          .filter(([name]) => operations.get(name) !== 2)
+          .map(([name, props]) => ({ name, props }))
+        return { totalCount: items.length, hasMore: false, items }
       },
       async causalChain([seed], relation) {
         return (edges.get(`${seed}\u0000${relation}`) || []).map((word) => ({ word }))
@@ -373,11 +376,13 @@ describe('syncSourcesToAnchorDB', () => {
       },
       async saveWithID(name, props) {
         records.set(name, props)
+        operations.set(name, 1)
         ops.saved.push(name)
       },
       async saveBatch(items) {
         for (const item of items) {
           records.set(item.name, item.props)
+          operations.set(item.name, item.operation ?? 1)
           ops.saved.push(item.name)
         }
         ops.batches.push(items.length)
@@ -444,9 +449,13 @@ describe('syncSourcesToAnchorDB', () => {
     assert.equal(second.tombstoned, 1)
     assert.ok(client.ops.unlinked.includes('a.js\u0000imports\u0000b.js'))
     assert.ok(client.ops.unlinked.includes('b.js\u0000imported_by\u0000a.js'))
-    // The record itself is not deletable in the protocol; the tombstone
-    // attribute marks it gone, so later syncs and traces skip it.
+    // The record itself is not deletable in the protocol; it is archived
+    // with the native opcode 2 (hidden from list and lookups) and the
+    // tombstone attribute stays as the version-tolerant marker.
     assert.equal(client.records.get('b.js').tombstone, 2)
+    assert.equal(client.operations.get('b.js'), 2)
+    const listed = await client.list({ limit: 100, offset: 0 })
+    assert.deepEqual(listed.items.map((item) => item.name), ['a.js'])
   })
 
   test('a tombstoned record is invisible to the next sync', async () => {
@@ -483,6 +492,24 @@ describe('syncSourcesToAnchorDB', () => {
     const props = client.records.get('b.js')
     assert.equal(props.tombstone, 0)
     assert.ok(Number.isInteger(props.size) && Number.isInteger(props.mtime))
+    // Revival is a normal save: back to the active opcode and visible again.
+    assert.equal(client.operations.get('b.js'), 1)
+    const listed = await client.list({ limit: 100, offset: 0 })
+    assert.ok(listed.items.some((item) => item.name === 'b.js'))
+  })
+
+  test('a legacy attribute-only tombstone migrates to the native opcode', async () => {
+    const root = makeRepo()
+    write(root, 'a.js', '')
+    const client = statefulClient()
+    // A record written by an older knl-view: tombstone attribute, no opcode.
+    client.records.set('b.js', { tombstone: 2 })
+
+    const result = await syncSourcesToAnchorDB(client, root)
+    assert.equal(result.tombstoned, 1)
+    assert.equal(client.operations.get('b.js'), 2)
+    const listed = await client.list({ limit: 100, offset: 0 })
+    assert.ok(!listed.items.some((item) => item.name === 'b.js'))
   })
 
   test('pending records go through saveBatch in one transactional call', async () => {
@@ -526,18 +553,19 @@ describe('syncSourcesToAnchorDB', () => {
 describe('symbol graph', () => {
   function statefulClient() {
     const records = new Map()
+    const operations = new Map()
     const edges = new Map()
     const ops = { linked: [], unlinked: [], saved: [], batches: [] }
     return {
       ops,
       records,
+      operations,
       edges,
       async list() {
-        return {
-          totalCount: records.size,
-          hasMore: false,
-          items: [...records].map(([name, props]) => ({ name, props }))
-        }
+        const items = [...records]
+          .filter(([name]) => operations.get(name) !== 2)
+          .map(([name, props]) => ({ name, props }))
+        return { totalCount: items.length, hasMore: false, items }
       },
       async causalChain([seed], relation) {
         return (edges.get(`${seed}\u0000${relation}`) || []).map((word) => ({ word }))
@@ -554,11 +582,13 @@ describe('symbol graph', () => {
       },
       async saveWithID(name, props) {
         records.set(name, props)
+        operations.set(name, 1)
         ops.saved.push(name)
       },
       async saveBatch(items) {
         for (const item of items) {
           records.set(item.name, item.props)
+          operations.set(item.name, item.operation ?? 1)
           ops.saved.push(item.name)
         }
         ops.batches.push(items.length)
@@ -802,5 +832,49 @@ describe('traceSources', () => {
 describe('SOURCE_RELATIONS', () => {
   test('the two mirrored directions', () => {
     assert.deepEqual(SOURCE_RELATIONS, ['imports', 'imported_by'])
+  })
+})
+
+describe('collector helpers', () => {
+  test('collectorHttpUrl maps the wire port to the REST port below it', () => {
+    assert.equal(collectorHttpUrl('wire://127.0.0.1:7448'), 'http://127.0.0.1:7447/v1/collector/run')
+    assert.equal(collectorHttpUrl('wire://localhost:7456'), 'http://localhost:7455/v1/collector/run')
+    assert.equal(collectorHttpUrl('http://10.0.0.5:9000'), null)
+  })
+
+  test('purgeArchivedRecords posts the model-scoped collector request', async () => {
+    const calls = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, options })
+      return {
+        ok: true,
+        json: async () => ({ success: true, purged_records: 7 })
+      }
+    }
+    try {
+      const purged = await purgeArchivedRecords('wire://127.0.0.1:7448', 'secret', 'mymodel')
+      assert.equal(purged, 7)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].url, 'http://127.0.0.1:7447/v1/collector/run')
+    assert.equal(calls[0].options.method, 'POST')
+    assert.equal(calls[0].options.headers.Authorization, 'Bearer secret')
+    assert.deepEqual(JSON.parse(calls[0].options.body), { model: 'mymodel' })
+  })
+
+  test('purgeArchivedRecords throws on a failed collector run', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => ({}) })
+    try {
+      await assert.rejects(
+        purgeArchivedRecords('wire://127.0.0.1:7448', 't', 'mymodel'),
+        /HTTP 500/
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

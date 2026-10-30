@@ -21,14 +21,19 @@ import { SYNTAX_LANGUAGES, extractCode } from './syntax.js'
 // the project's label dir (.knowledges/.knl-data by default, overridable
 // via the project config's labelDir), regenerated on every sync.
 //
-// Removed files: the protocol has no delete, so their record is marked with
-// the tombstone attribute (2 = gone, 0 = alive) after its edges are
-// unlinked. Tombstoned records are skipped by every later sync and are
-// unreachable in a trace; if the file reappears, a normal attribute save
-// lifts the tombstone and the edges are relinked.
+// Removed files: the protocol has no delete, so after their edges are
+// unlinked the record is archived with the native lifecycle opcode 2
+// (TOMBSTONE: the server hides it from list and lookups) and the tombstone
+// attribute is kept as a version-tolerant marker for readers that predate
+// opcode support. A collector run purges archived records physically; if
+// the file reappears, a normal save revives the record and the edges are
+// relinked.
 
 export const SOURCE_RELATIONS = ['imports', 'imported_by']
 export const SOURCE_TOMBSTONE = 2
+// OpStatus on the wire: 1 = Active, 2 = Archived (TOMBSTONE).
+export const OP_ACTIVE = 1
+export const OP_ARCHIVED = 2
 // Symbol layer, same AnchorDB model as the files: a file defines symbols,
 // symbols call symbols. Mirrored both directions like imports, for the same
 // reason: causalChain walks forward only.
@@ -429,13 +434,13 @@ export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir } = {}) 
   const diskIds = new Set(nodes.map((node) => node.id))
 
   // Page through the full record list: server truth for which nodes exist.
-  // Tombstoned records are invisible: not nodes, not seeds, not savable.
+  // Records the server already archived (opcode 2) never appear here, so a
+  // tombstone is written once and never revisited.
   const serverAttrs = new Map()
   let offset = 0
   for (;;) {
     const page = await client.list({ limit: 500, offset })
     for (const item of page.items || []) {
-      if ((item.props || {}).tombstone === SOURCE_TOMBSTONE) continue
       serverAttrs.set(item.name, item.props || {})
     }
     if (!page.hasMore || !page.items?.length) break
@@ -489,12 +494,13 @@ export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir } = {}) 
   }
 
   // Server records whose file is gone: their edges are already unlinked
-  // above; mark them with the tombstone attribute so no later sync or trace
-  // ever reaches them again. Tombstone writes join the same batch below.
+  // above; archive them with the native tombstone opcode so the server
+  // hides them and a collector run can purge them. The attribute stays as
+  // the marker for servers that predate opcode support.
   const pending = []
   for (const name of serverAttrs.keys()) {
     if (diskIds.has(name)) continue
-    pending.push({ name, props: { tombstone: SOURCE_TOMBSTONE }, tombstone: true })
+    pending.push({ name, props: { tombstone: SOURCE_TOMBSTONE }, operation: OP_ARCHIVED, tombstone: true })
   }
 
   // Node records carry the numeric attributes. Existing records are only
@@ -618,4 +624,44 @@ export async function traceSources(client, target, direction = 'both', maxHops =
   const out = direction === 'in' ? [] : await walk(target, outRelation)
   const inc = direction === 'out' ? [] : await walk(target, inRelation)
   return { out, in: inc }
+}
+
+/**
+ * HTTP URL of the administration endpoint for a wire:// URL. AnchorDB
+ * listens wire on one port and REST on the port below it by default
+ * (7448/7447); both are plain host:port.
+ */
+export function collectorHttpUrl(wireUrl) {
+  const match = /^wire:\/\/([^?]+)/i.exec(String(wireUrl))
+  if (!match) return null
+  const hostPort = match[1]
+  const at = hostPort.lastIndexOf(':')
+  if (at <= 0) return null
+  const host = hostPort.slice(0, at)
+  const port = Number.parseInt(hostPort.slice(at + 1), 10)
+  if (!Number.isInteger(port) || port <= 1) return null
+  return `http://${host}:${port - 1}/v1/collector/run`
+}
+
+/**
+ * Ask the server's collector to purge archived (opcode 2) records of one
+ * model. Wire cannot start collector jobs; this is the documented HTTP
+ * route, scoped to the model so no other model's tombstones are touched.
+ * @returns {Promise<number>} records purged
+ */
+export async function purgeArchivedRecords(wireUrl, token, model) {
+  const url = collectorHttpUrl(wireUrl)
+  if (!url) throw new Error(`cannot derive the collector endpoint from "${wireUrl}"`)
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ model })
+  })
+  if (!res.ok) throw new Error(`collector run failed (HTTP ${res.status})`)
+  const body = await res.json()
+  if (!body.success) throw new Error(`collector run failed: ${body.message || 'unknown error'}`)
+  return body.purged_records ?? 0
 }
