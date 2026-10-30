@@ -96,6 +96,8 @@ export function normalizeProjectConfig(raw) {
   if (models) config.models = models
   const model = cleanString(raw.model)
   if (model) config.model = model
+  const labelDir = cleanString(raw.labelDir)
+  if (labelDir) config.labelDir = labelDir
   return config
 }
 
@@ -205,11 +207,14 @@ export function resolveSettings({ cli = {}, project = null, global: globalConfig
     anchordb.model = (hasModels && resolveModel(models)) || cleanString(anchordb.model) || null
   }
 
+  const labelDir = pickString(cli.labelDir, p.labelDir)
+
   return {
     path: pickString(cli.path, p.path) ?? DEFAULT_SETTINGS.path,
     port: pickString(cli.port, p.port) ?? DEFAULT_SETTINGS.port,
     host: pickString(cli.host, p.host) ?? DEFAULT_SETTINGS.host,
     models: hasModels ? models : null,
+    labelDir: labelDir ?? null,
     anchordb
   }
 }

@@ -201,6 +201,7 @@ describe('resolveSettings', () => {
       port: DEFAULT_SETTINGS.port,
       host: DEFAULT_SETTINGS.host,
       models: null,
+      labelDir: null,
       anchordb: null
     })
   })
@@ -221,6 +222,7 @@ describe('resolveSettings', () => {
       port: '7777',
       host: '0.0.0.0',
       models: null,
+      labelDir: null,
       anchordb: null
     })
   })

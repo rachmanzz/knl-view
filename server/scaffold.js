@@ -224,8 +224,8 @@ config values.
 
 Installing AnchorDB (optional — the viewer runs fully local without it):
 \`knl-view install anchordb\` — native binary from GitHub Releases on
-Linux (SHA256-verified), or a container from ghcr.io/rachmanzz/anchordb
-via docker/podman elsewhere (AnchorDB needs Linux mmap). Flags:
+Linux and macOS (SHA256-verified), or a container from
+ghcr.io/rachmanzz/anchordb via docker/podman on other platforms. Flags:
 \`--yes\`, \`--method=binary|container\`, \`--token=...\`.
 
 Two-way lineage: graph traces take \`--direction\` (CLI) or
@@ -250,13 +250,38 @@ else incoming \`agrees_with\` → \`consensus\`, else \`uncontested\`.
 plus a mapped \`consensus\` role.
 
 Sources graph (whole project): a third AnchorDB model, the \`sources\`
-role, holds every project file as a node (id = repo-relative path) and
-every relative JS import as an edge stored in both directions
-(\`imports\`, \`imported_by\`). Hidden folders are skipped except
-.github; node_modules, dist, and .gitignore patterns are ignored.
-\`knl-view sources sync\` is idempotent and server-authoritative (no
-local mirror); \`knl-view sources trace --target=<path>\` and
-\`GET /api/sources/trace?target=<path>\` answer file lineage.
+role, holds the dependency graph of the whole project — files and their
+named symbols. Every file is a node (id = repo-relative path); import
+edges are extracted with tree-sitter syntax parsing (JS family and Go
+today) and stored in both directions (\`imports\`, \`imported_by\`).
+Each file also defines symbol nodes: ids are \`<path>#<name>\` (class
+methods \`Class.method\`; a name defined more than once in one file gets
+a line suffix \`<path>#<name>@<line>\`), kinds are \`function\`,
+\`class\`, \`method\`, \`type\`. Edges: \`defines\`/\`defined_in\`
+(file → symbol) and \`calls\`/\`called_by\` (symbol → symbol), both
+directions stored. Call resolution is conservative: the call belongs to
+its innermost enclosing symbol and the callee must match exactly one
+definition project-wide — ambiguous names are skipped, never guessed.
+Label text (symbol names and kinds; AnchorDB attributes are
+numeric-only) lives in \`.knowledges/.knl-data/<path>.md\`, one file per
+source file that has symbols; override with \`labelDir\` in the project
+config. Hidden folders are skipped except .github; node_modules, dist,
+and .gitignore patterns are ignored. \`knl-view sources sync\` is
+idempotent and server-authoritative (no local mirror);
+\`knl-view sources trace --target=<id>\` and
+\`GET /api/sources/trace?target=<id>\` answer lineage — a target
+containing \`#\` walks symbol lineage (\`calls\`/\`called_by\`), a
+plain path walks file lineage (\`imports\`/\`imported_by\`). A removed
+file or symbol is tombstoned (attribute \`tombstone = 2\`) after its
+edges are unlinked; if it comes back, the tombstone lifts and the edges
+are relinked.
+
+Decision history skill: recording architectural decisions is delegated
+to the separate decision-history skill (its decision block format is its
+own domain; this skill never writes decision blocks). If it is not
+installed in the project yet, install it first:
+\`npx skills add rachmanzz/decisionskills --skill decision-history\`
+or, with agy: \`agy plugin install https://github.com/rachmanzz/decisionskills\`.
 
 ## Rules
 
@@ -266,4 +291,86 @@ local mirror); \`knl-view sources trace --target=<path>\` and
   when no map entry covers it.
 - Keep \`order\` values small and dense per menu level (1, 2, 3).
 - When the map and disk disagree about existence, the disk wins.
+
+## Features writing rules
+
+Under \`features/{feature_name}/\`, prefer to keep at least:
+- \`prd.md\` — Product Requirements Document for this feature
+- \`detail-plan.md\` — concrete implementation plan, decisions, trade-offs
+
+Names are kebab-case for the folder. Keep other artifacts minimal and cover
+them via \`map.json\` if they need custom menu labels/order.
+
+## Futures writing rules
+
+Under \`futures/\`, the base typically has:
+- \`README.md\` — vision/overview
+- \`prd.md\` — global PRD covering proposed future work
+
+Use kebab-case for any additional future documents. Defer exotic filenames
+to \`map.json\`.
+
+## Roadmap writing rules
+
+Under \`roadmap/\`, maintain milestone-oriented notes. Keep \`README.md\` as
+the index and split by milestones only when they grow large. Use
+\`map.json\` to reorder milestones/files without renaming.
+
+## Roasted writing rules
+
+All artifacts from roasting/audits go under \`roasted/\` (relative to the
+knowledge base root in use; i.e. the directory passed via \`--path\`, which
+may be \`.knowledges\` or a custom one). Do **not** place them in the root
+of that directory.
+
+### Naming
+
+\`roasted/{roasted_name}_v{number}.md\` — kebab-case name, integer
+\`number\` starting at \`1\`.
+
+### Stack order
+
+- \`_v1\` is the first roast → placed at the bottom of the stack
+- each new roast increments number and goes at the top (highest number =
+  newest)
+- files are immutable by number; updates belong to the same file, not a
+  new one
+
+### Classification
+
+Every roast must state:
+- \`Severity\`: \`P0|P1|P2|P3\`
+- \`Class\`: \`BUG|PERF|VULN|DEBT|CEILING|PROSES\`
+
+## When the agent triggers the graph
+
+The graph stays true only if the agent feeds it. Every trigger goes
+through the single \`knl-view\` entrypoint with the existing subcommands
+below; never invent another binary, script, or wrapper to fire any of
+this.
+
+- After creating, editing, renaming, or deleting any project file:
+  run \`knl-view sources sync\`. It is server-authoritative and
+  idempotent: run it again and only the difference is applied.
+- Before changing a file that other files may depend on:
+  \`knl-view sources trace --target=<path> --direction=in\` shows who
+  depends on it first (the blast radius).
+- Before adding an import to, or moving logic out of, another file:
+  \`knl-view sources trace --target=<path> --direction=out\` shows what
+  it already touches.
+- Before changing or removing a function, method, or type:
+  \`knl-view sources trace --target=<path>#<name> --direction=in\` shows
+  every symbol that calls it first.
+- Before renaming a symbol or moving it to another file: remember its
+  record id contains the old name/path. Sync tombstones the stale record
+  and creates the new one; trace by the new id afterwards.
+- A new architectural decision: trigger the decision-history skill
+  (install it first if missing — see "Decision history skill" above).
+  The decision block format is that skill's domain; this skill never
+  writes decision blocks.
+- A technical disagreement worth recording as claims:
+  \`knl-view consensus claim "<statement>"\`, then
+  \`knl-view consensus agree <id> <id>\` or
+  \`knl-view consensus contradict <id> <id>\`. A claim that lost its
+  ground: \`knl-view consensus retract <id> <id>\`.
 `

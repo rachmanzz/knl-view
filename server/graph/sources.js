@@ -2,22 +2,24 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { GraphNode } from './model.js'
 import { edgeKey } from './anchordb_client.js'
-import { SYNTAX_LANGUAGES, extractImportSpecifiers } from './syntax.js'
+import { SYNTAX_LANGUAGES, extractCode } from './syntax.js'
 
 // Sources graph: the whole project as a dependency graph in AnchorDB, not
-// just the .knowledges markdown. Every file becomes a node (id = repo
-// relative path); import edges come from tree-sitter syntax extraction
-// (JS family and Go today, one uniform API per language). Hidden paths
-// (dot-prefixed) are skipped except .github; node_modules, dist, and
-// .gitignore patterns are skipped so dependency folders cannot flood the
-// graph.
+// just the .knowledges markdown. Nodes are the files (id = repo relative
+// path) and the named symbols they define (id = `<path>#<name>`, from
+// tree-sitter syntax extraction: JS family and Go today, one uniform API
+// per language). Edges: file imports file, file defines symbol, symbol
+// calls symbol — each stored in both directions because causalChain walks
+// forward only. Hidden paths (dot-prefixed) are skipped except .github;
+// node_modules, dist, and .gitignore patterns are skipped so dependency
+// folders cannot flood the graph.
 //
 // Everything lives in the server. Nodes are records with numeric attributes
-// only (AnchorDB admits no text), enumerated with list(); edges are stored
-// in both directions (imports and imported_by) because causalChain walks
-// forward only, and both directions are needed for lineage. Sync is
+// only (AnchorDB admits no text), enumerated with list(); sync is
 // server-authoritative: it enumerates what the server already has instead
-// of trusting a local mirror.
+// of trusting a local mirror. Label text (symbol names and kinds) lives in
+// the project's label dir (.knowledges/.knl-data by default, overridable
+// via the project config's labelDir), regenerated on every sync.
 //
 // Removed files: the protocol has no delete, so their record is marked with
 // the tombstone attribute (2 = gone, 0 = alive) after its edges are
@@ -27,6 +29,22 @@ import { SYNTAX_LANGUAGES, extractImportSpecifiers } from './syntax.js'
 
 export const SOURCE_RELATIONS = ['imports', 'imported_by']
 export const SOURCE_TOMBSTONE = 2
+// Symbol layer, same AnchorDB model as the files: a file defines symbols,
+// symbols call symbols. Mirrored both directions like imports, for the same
+// reason: causalChain walks forward only.
+export const SYMBOL_RELATIONS = ['defines', 'defined_in', 'calls', 'called_by']
+export const SYNC_RELATIONS = [...SOURCE_RELATIONS, ...SYMBOL_RELATIONS]
+
+const REVERSE_EDGE = {
+  imports: 'imported_by',
+  defines: 'defined_in',
+  calls: 'called_by'
+}
+
+// Where generated label files live inside the target project: the label
+// text AnchorDB cannot hold (numeric-only attributes). Overridable via the
+// project config's labelDir.
+const DEFAULT_LABEL_DIR = '.knowledges/.knl-data'
 const DEFAULT_IGNORES = ['node_modules', 'dist', 'build', 'coverage']
 
 const JS_EXTS = new Set(['.js', '.mjs', '.cjs'])
@@ -169,15 +187,20 @@ export function resolveImportSpecifier(fromRel, spec, files) {
 }
 
 /**
- * Build the desired sources graph: nodes for every scanned file, import
- * edges from tree-sitter extraction (JS relative imports, Go module-internal
- * imports). Returns plain arrays so callers can diff without depending on
- * the DirectedGraph type.
+ * Build the desired sources graph: nodes for every scanned file plus one
+ * node per named symbol, and edges from tree-sitter extraction (file-level
+ * imports, file-defines-symbol, symbol-calls-symbol). Symbol node ids are
+ * `<path>#<name>`; class methods are `Class.method`. Returns plain arrays
+ * so callers can diff without depending on the DirectedGraph type.
  */
 export async function buildSourcesGraph(rootAbs, files = null) {
   const scanned = files || await scanSourceFiles(rootAbs)
   const modulePath = await goModulePath(rootAbs)
   const edges = []
+  const symbolIndex = new Map() // symbol name -> [node id, ...] for call resolution
+  const symbolsByFile = new Map() // file rel -> symbol nodes
+
+  const structure = {}
   for (const [rel] of Object.entries(scanned)) {
     const ext = path.posix.extname(rel).toLowerCase()
     if (!SYNTAX_LANGUAGES[ext]) continue
@@ -187,19 +210,51 @@ export async function buildSourcesGraph(rootAbs, files = null) {
     } catch {
       continue
     }
-    let specs
+    let extracted
     try {
-      specs = await extractImportSpecifiers(ext, content)
+      extracted = await extractCode(ext, content)
     } catch {
       continue
     }
-    const targets = ext === '.go'
-      ? specs.flatMap((spec) => resolveGoSpecifiers(spec, modulePath, scanned))
-      : resolveJsSpecifiers(rel, specs, scanned)
-    for (const target of targets) {
-      if (target && target !== rel) edges.push({ from: rel, to: target })
+    structure[rel] = { ext, modulePath, ...extracted }
+
+    // Symbol ids are `<path>#<name>`, but a name may legitimately occur
+    // more than once in one file (three `walk` helpers, say). Plain ids
+    // would collide on one AnchorDB record, so repeated names get a line
+    // suffix: `<path>#<name>@<line>`. Deterministic, and call resolution
+    // sees them as ambiguous like any other repeated name.
+    const nameCounts = new Map()
+    for (const symbol of extracted.symbols) {
+      nameCounts.set(symbol.name, (nameCounts.get(symbol.name) || 0) + 1)
+    }
+    const fileSymbols = extracted.symbols.map((symbol) => ({
+      ...symbol,
+      id: nameCounts.get(symbol.name) > 1
+        ? `${rel}#${symbol.name}@${symbol.line}`
+        : `${rel}#${symbol.name}`
+    }))
+    if (fileSymbols.length) symbolsByFile.set(rel, fileSymbols)
+    // ResolveCallTargets builds call edges *from* these symbols, so store
+    // the id-carrying list (duplicate names already line-suffixed here).
+    structure[rel].symbols = fileSymbols
+    for (const symbol of fileSymbols) {
+      symbolIndex.set(symbol.name, [...(symbolIndex.get(symbol.name) || []), symbol.id])
+      edges.push({ from: rel, to: symbol.id, type: 'defines' })
     }
   }
+
+  for (const [rel, file] of Object.entries(structure)) {
+    const targets = file.ext === '.go'
+      ? file.imports.flatMap((spec) => resolveGoSpecifiers(spec, file.modulePath, scanned))
+      : resolveJsSpecifiers(rel, file.imports, scanned)
+    for (const target of targets) {
+      if (target && target !== rel) edges.push({ from: rel, to: target, type: 'imports' })
+    }
+    for (const call of resolveCallTargets(rel, file, symbolIndex, scanned)) {
+      edges.push({ from: call.from, to: call.to, type: 'calls' })
+    }
+  }
+
   const nodes = Object.entries(scanned).map(([rel, attrs]) => new GraphNode({
     id: rel,
     title: rel,
@@ -207,19 +262,157 @@ export async function buildSourcesGraph(rootAbs, files = null) {
     path: rel,
     metadata: attrs
   }))
-  return { nodes, edges }
+  for (const [rel, list] of symbolsByFile.entries()) {
+    for (const symbol of list) {
+      nodes.push(new GraphNode({
+        id: symbol.id,
+        title: symbol.id,
+        type: 'symbol',
+        path: rel,
+        metadata: { line: symbol.line, lines: symbol.lines }
+      }))
+    }
+  }
+  return { nodes, edges, symbolsByFile }
 }
 
 /**
- * Desired edge keys in both directions, for diffing against the server.
+ * Resolve a file's call sites to symbol nodes. The call is attributed to
+ * the innermost enclosing symbol by line range; the target is resolved by
+ * name: a name defined exactly once project-wide is unambiguous, anything
+ * else is skipped rather than guessed. Go additionally accepts a qualified
+ * callee (`Recv.Method`, `pkg.Fn`) and prefers a symbol defined in the
+ * same package directory.
+ */
+export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
+  const symbols = file.symbols || []
+  const dir = path.posix.dirname(fromRel)
+  // A candidate resolves when exactly one definition matches, preferring
+  // definitions in the same package directory; anything ambiguous or
+  // external stays out of the graph.
+  const resolve = (key) => {
+    const ids = symbolIndex.get(key) || []
+    const local = ids.filter((id) => path.posix.dirname(id.split('#')[0]) === dir)
+    const pick = local.length === 1 ? local : ids
+    return pick.length === 1 ? pick[0] : null
+  }
+  const importNames = file.importNames instanceof Set
+    ? file.importNames
+    : new Set(file.importNames || [])
+  const targets = []
+  for (const call of file.calls || []) {
+    // Innermost symbol containing the call row: same file, so ordering by
+    // start line and taking the narrowest match is enough.
+    let owner = null
+    for (const symbol of symbols) {
+      const start = symbol.line - 1
+      const end = start + symbol.lines
+      if (call.row >= start && call.row < end) {
+        if (!owner || symbol.lines < owner.lines) owner = symbol
+      }
+    }
+    if (!owner) continue
+    const from = owner.id || `${fromRel}#${owner.name}`
+    // Import evidence: a bare-name fallback is only allowed for a call
+    // with no receiver, or whose receiver is an import of this file.
+    // Without this, `s.logger.Log()` anywhere would be absorbed by the
+    // single project-wide `Log()` definition no matter its receiver type.
+    if (call.recv && !importNames.has(call.recv)) continue
+    const candidates = []
+    if (call.recv) candidates.push(`${call.recv}.${call.name}`)
+    candidates.push(call.name)
+    for (const key of candidates) {
+      const to = resolve(key)
+      if (to && to !== from) {
+        targets.push({ from, to })
+        break
+      }
+    }
+  }
+  return targets
+}
+
+/**
+ * Desired edge keys in both directions for every relation type, for
+ * diffing against the server.
  */
 export function desiredSourceEdgeKeys(edges) {
   const keys = new Set()
-  for (const { from, to } of edges) {
-    keys.add(edgeKey(from, 'imports', to))
-    keys.add(edgeKey(to, 'imported_by', from))
+  for (const { from, to, type = 'imports' } of edges) {
+    keys.add(edgeKey(from, type, to))
+    keys.add(edgeKey(to, REVERSE_EDGE[type], from))
   }
   return keys
+}
+
+/**
+ * Label text for one file's symbols: the information AnchorDB cannot hold
+ * (attributes are numeric-only). Written under the label dir as a mirror
+ * of the repo-relative path, one .md per file that has symbols.
+ */
+export function labelContent(rel, symbols) {
+  const lines = [`# ${rel}`, '']
+  for (const symbol of symbols) {
+    lines.push(`- \`${symbol.name}\` (${symbol.kind}, line ${symbol.line})`)
+  }
+  return lines.join('\n') + '\n'
+}
+
+/**
+ * Reconcile the label files on disk with the current symbol state:
+ * write files whose content changed, delete files whose file or last
+ * symbol is gone. Generated files only; never touches anything else.
+ */
+export async function writeLabelFiles(rootAbs, labelDir = DEFAULT_LABEL_DIR, symbolsByFile) {
+  const base = path.join(rootAbs, labelDir)
+  const expected = new Map()
+  for (const [rel, symbols] of symbolsByFile) expected.set(rel, labelContent(rel, symbols))
+
+  const existing = new Set()
+  const walk = async (dir, rel) => {
+    let entries
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isDirectory()) await walk(path.join(dir, entry.name), childRel)
+      else if (entry.isFile() && entry.name.endsWith('.md')) existing.add(childRel.slice(0, -3))
+    }
+  }
+  await walk(base, '')
+
+  const written = []
+  const deleted = []
+  for (const [rel, content] of expected) {
+    const abs = path.join(base, `${rel}.md`)
+    let current = null
+    try {
+      current = await fs.readFile(abs, 'utf8')
+    } catch {
+      // No file yet: it will be written below.
+    }
+    if (current === content) continue
+    try {
+      await fs.mkdir(path.dirname(abs), { recursive: true })
+      await fs.writeFile(abs, content, 'utf8')
+      written.push(rel)
+    } catch {
+      // Label files are a convenience; a failed write is not a sync failure.
+    }
+  }
+  for (const rel of existing) {
+    if (expected.has(rel)) continue
+    try {
+      await fs.rm(path.join(base, `${rel}.md`), { force: true })
+      deleted.push(rel)
+    } catch {
+      // Same: best effort.
+    }
+  }
+  return { written, deleted }
 }
 
 /**
@@ -228,13 +421,15 @@ export function desiredSourceEdgeKeys(edges) {
  * freshly scanned disk state, and applies the difference. No local mirror:
  * the server is the single source of truth.
  *
- * Records of removed files are not deletable (the protocol has no delete),
- * so their edges are unlinked and the record stays edgeless and invisible.
+ * Records of removed files and removed symbols are not deletable (the
+ * protocol has no delete), so their edges are unlinked and the record is
+ * tombstoned, invisible to every later sync and trace.
  *
- * @returns {Promise<{linked, unlinked, saved, failed, nodes, edges}>}
+ * @returns {Promise<{linked, unlinked, saved, tombstoned, failed, orphans,
+ *   files, symbols, edges, labels}>}
  */
-export async function syncSourcesToAnchorDB(client, rootAbs) {
-  const { nodes, edges } = await buildSourcesGraph(rootAbs)
+export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir } = {}) {
+  const { nodes, edges, symbolsByFile } = await buildSourcesGraph(rootAbs)
   const desired = desiredSourceEdgeKeys(edges)
   const diskIds = new Set(nodes.map((node) => node.id))
 
@@ -260,7 +455,7 @@ export async function syncSourcesToAnchorDB(client, rootAbs) {
     seeds.add(to)
   }
   for (const seed of seeds) {
-    for (const relation of SOURCE_RELATIONS) {
+    for (const relation of SYNC_RELATIONS) {
       let rows
       try {
         rows = await client.causalChain([seed], relation, 1000)
@@ -300,15 +495,11 @@ export async function syncSourcesToAnchorDB(client, rootAbs) {
 
   // Server records whose file is gone: their edges are already unlinked
   // above; mark them with the tombstone attribute so no later sync or trace
-  // ever reaches them again.
+  // ever reaches them again. Tombstone writes join the same batch below.
+  const pending = []
   for (const name of serverAttrs.keys()) {
     if (diskIds.has(name)) continue
-    try {
-      await client.saveWithID(name, { tombstone: SOURCE_TOMBSTONE })
-      tombstoned += 1
-    } catch {
-      failed += 1
-    }
+    pending.push({ name, props: { tombstone: SOURCE_TOMBSTONE }, tombstone: true })
   }
 
   // Node records carry the numeric attributes. Existing records are only
@@ -316,29 +507,95 @@ export async function syncSourcesToAnchorDB(client, rootAbs) {
   // state explicit even if the server merges attributes.
   for (const node of nodes) {
     const current = serverAttrs.get(node.id)
-    if (current && current.size === node.metadata.size && current.mtime === node.metadata.mtime) continue
-    try {
-      await client.saveWithID(node.id, {
-        size: node.metadata.size,
-        mtime: node.metadata.mtime,
-        tombstone: 0
-      })
+    if (current && current.size === node.metadata.size && current.mtime === node.metadata.mtime
+      && current.line === node.metadata.line && current.lines === node.metadata.lines) continue
+    pending.push({ name: node.id, props: { ...node.metadata, tombstone: 0 } })
+  }
+
+  // Records alive on the server after this sync: pre-existing ones plus
+  // whatever this sync successfully saved.
+  const live = new Set(serverAttrs.keys())
+
+  // One transactional batch when the wire client supports it (orders of
+  // magnitude faster than per-record saves at scale); per-record fallback
+  // keeps a single bad record from losing the rest.
+  const saveOne = async (item) => {
+    await client.saveWithID(item.name, item.props)
+    if (item.tombstone) tombstoned += 1
+    else {
       saved += 1
-    } catch {
-      failed += 1
+      live.add(item.name)
+    }
+  }
+  if (pending.length) {
+    if (typeof client.saveBatch === 'function') {
+      try {
+        await client.saveBatch(pending)
+        for (const item of pending) {
+          if (item.tombstone) tombstoned += 1
+          else {
+            saved += 1
+            live.add(item.name)
+          }
+        }
+      } catch {
+        // Batch refused as a whole: retry one by one.
+        for (const item of pending) {
+          try {
+            await saveOne(item)
+          } catch {
+            failed += 1
+          }
+        }
+      }
+    } else {
+      for (const item of pending) {
+        try {
+          await saveOne(item)
+        } catch {
+          failed += 1
+        }
+      }
     }
   }
 
-  return { linked, unlinked, saved, tombstoned, failed, nodes: nodes.length, edges: desired.size / 2 }
+  // Integrity check: every desired edge endpoint must exist as a live
+  // record on the server. An edge whose endpoint failed to save would
+  // dangle; count those, never hide.
+  let orphans = 0
+  for (const { from, to } of edges) {
+    if (!live.has(from) || !live.has(to)) orphans += 1
+  }
+
+  const labels = await writeLabelFiles(rootAbs, labelDir || DEFAULT_LABEL_DIR, symbolsByFile)
+
+  const files = nodes.filter((node) => node.type === 'file').length
+  const symbols = nodes.filter((node) => node.type === 'symbol').length
+  return {
+    linked,
+    unlinked,
+    saved,
+    tombstoned,
+    failed,
+    orphans,
+    files,
+    symbols,
+    edges: desired.size / 2,
+    labels: { written: labels.written.length, deleted: labels.deleted.length }
+  }
 }
 
 /**
- * Lineage over the sources graph, entirely server-side: `out` follows
- * imports, `in` follows the mirrored imported_by edges. causalChain is
- * direct-only, so hops beyond one are walked level by level. Returns
- * [id, hop] entries per direction; callers shape the response.
+ * Lineage over the sources graph, entirely server-side: files walk
+ * imports/imported_by, symbols (ids containing '#') walk calls/called_by.
+ * causalChain is direct-only, so hops beyond one are walked level by
+ * level. Returns [id, hop] entries per direction; callers shape the
+ * response.
  */
 export async function traceSources(client, target, direction = 'both', maxHops = 2) {
+  const symbol = target.includes('#')
+  const outRelation = symbol ? 'calls' : 'imports'
+  const inRelation = symbol ? 'called_by' : 'imported_by'
   const walk = async (start, relation) => {
     const seen = new Map()
     let frontier = [start]
@@ -363,7 +620,7 @@ export async function traceSources(client, target, direction = 'both', maxHops =
     }
     return [...seen.entries()].filter(([id]) => id !== start)
   }
-  const out = direction === 'in' ? [] : await walk(target, 'imports')
-  const inc = direction === 'out' ? [] : await walk(target, 'imported_by')
+  const out = direction === 'in' ? [] : await walk(target, outRelation)
+  const inc = direction === 'out' ? [] : await walk(target, inRelation)
   return { out, in: inc }
 }

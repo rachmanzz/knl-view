@@ -77,8 +77,7 @@ Commands:
                             write it to knl-config.json and the global registry
   model check               Check this project's models map and the global registry
   install anchordb          Install AnchorDB: binary from GitHub Releases on
-                            Linux; docker/podman container on other platforms
-                            (AnchorDB needs Linux mmap)
+                            Linux and macOS; docker/podman container elsewhere
   consensus claim "<text>"  Register a content-addressed claim (c-<hash>)
   consensus agree <a> <b>   Claim a supports claim b (stored in AnchorDB)
   consensus contradict <a> <b>  Claim a opposes claim b
@@ -473,31 +472,31 @@ async function askYesNo(rl, question, fallback) {
   return answer === 'y' || answer === 'yes'
 }
 
-// The "install anchordb" command. Linux: binary from GitHub Releases
-// (verified against SHA256SUMS.txt). Other platforms: ghcr.io container;
-// AnchorDB needs Linux mmap, so on macOS/Windows it runs inside a Linux
-// container via docker/podman. After install, the "anchordb" block is
-// written to the global config so every project can connect right away.
+// The "install anchordb" command. Linux and macOS: binary from GitHub
+// Releases (verified against SHA256SUMS.txt). Windows (and anyone who
+// prefers it): ghcr.io container via docker/podman. After install, the
+// "anchordb" block is written to the global config so every project can
+// connect right away.
 async function runInstallCommand(target, { values }) {
   if (target !== 'anchordb') {
     fail(`Unknown install target: ${target || '(none)'}\nAvailable: knl-view install anchordb`)
   }
-  const isLinux = process.platform === 'linux'
+  const nativeOk = process.platform === 'linux' || process.platform === 'darwin'
   const interactive = Boolean(process.stdin.isTTY) && !values.yes
   const rl = interactive ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null
 
   let method = values.method
   if (!method) {
-    if (isLinux) {
+    if (nativeOk) {
       method = interactive
         ? await askChoice(rl, 'AnchorDB install method?', [
-            ['binary', 'Binary from GitHub Releases (native Linux)'],
+            ['binary', 'Binary from GitHub Releases (native)'],
             ['container', 'docker/podman container (ghcr.io)']
           ], 'binary')
         : 'binary'
     } else {
       method = 'container'
-      process.stdout.write('AnchorDB needs Linux mmap; on this platform it is installed as a Linux container.\n')
+      process.stdout.write('No native build for this platform; installing as a Linux container (ghcr.io).\n')
     }
   }
   if (!['binary', 'container'].includes(method)) {
@@ -512,8 +511,8 @@ async function runInstallCommand(target, { values }) {
 
   try {
     if (method === 'binary') {
-      if (!isLinux) {
-        fail('The binary method is Linux-only (AnchorDB needs Linux mmap).\nUse --method=container.')
+      if (!nativeOk) {
+        fail('The binary method needs Linux or macOS.\nUse --method=container.')
       }
       const { version } = await latestRelease()
       const asset = releaseAssetName(version)
@@ -792,12 +791,19 @@ async function runSourcesCommand(sub, values, { settings }) {
   const projectRoot = process.cwd()
 
   if (sub === 'sync') {
-    const result = await syncSourcesToAnchorDB(client, projectRoot)
-    const parts = [`${result.nodes} files`, `${result.edges} import edges`]
+    const result = await syncSourcesToAnchorDB(client, projectRoot, { labelDir: settings.labelDir })
+    const parts = [
+      `${result.files} files`,
+      `${result.symbols} symbols`,
+      `${result.edges} edges`
+    ]
     if (result.linked) parts.push(`+${result.linked} linked`)
     if (result.unlinked) parts.push(`-${result.unlinked} unlinked`)
     if (result.saved) parts.push(`${result.saved} record${result.saved === 1 ? '' : 's'} saved`)
     if (result.tombstoned) parts.push(`${result.tombstoned} tombstoned`)
+    if (result.orphans) parts.push(`${result.orphans} ORPHAN EDGES`)
+    if (result.labels.written) parts.push(`${result.labels.written} labels written`)
+    if (result.labels.deleted) parts.push(`${result.labels.deleted} labels deleted`)
     if (result.failed) parts.push(`${result.failed} FAILED`)
     process.stdout.write(`sources synced: ${parts.join(', ')}\n`)
     if (result.failed) {

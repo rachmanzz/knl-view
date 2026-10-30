@@ -9,12 +9,17 @@ import {
   resolveJsSpecifiers,
   resolveGoSpecifiers,
   goModulePath,
+  resolveCallTargets,
   buildSourcesGraph,
   desiredSourceEdgeKeys,
+  labelContent,
+  writeLabelFiles,
   syncSourcesToAnchorDB,
-  SOURCE_RELATIONS
+  traceSources,
+  SOURCE_RELATIONS,
+  SYMBOL_RELATIONS
 } from '../server/graph/sources.js'
-import { extractImportSpecifiers } from '../server/graph/syntax.js'
+import { extractCode } from '../server/graph/syntax.js'
 import { edgeKey } from '../server/graph/anchordb_client.js'
 
 function makeRepo() {
@@ -65,7 +70,7 @@ describe('scanSourceFiles', () => {
   })
 })
 
-describe('extractImportSpecifiers (tree-sitter)', () => {
+describe('extractCode (tree-sitter)', () => {
   test('JS: ESM, dynamic, and CJS specifiers, raw and unfiltered', async () => {
     const code = [
       "import x from './a.js'",
@@ -78,8 +83,8 @@ describe('extractImportSpecifiers (tree-sitter)', () => {
       "import pkg from '@scope/pkg'",
       "const url = import('https://example.com/x.js')"
     ].join('\n')
-    const specs = await extractImportSpecifiers('.js', code)
-    assert.deepEqual(specs.sort(), [
+    const { imports } = await extractCode('.js', code)
+    assert.deepEqual(imports.sort(), [
       '../lib/b.js', './a.js', './c.js', './d.js', './e.js',
       './side-effect.js', '@scope/pkg', 'https://example.com/x.js', 'node:fs'
     ])
@@ -88,11 +93,11 @@ describe('extractImportSpecifiers (tree-sitter)', () => {
   test('JS: comments and strings do not produce phantom imports', async () => {
     const code = [
       '// import x from "./fake.js"',
-      'const s = "import y from \'./also-fake.js\'"',
+      "const s = \"import y from './also-fake.js'\"",
       "import real from './real.js'"
     ].join('\n')
-    const specs = await extractImportSpecifiers('.js', code)
-    assert.deepEqual(specs, ['./real.js'])
+    const { imports } = await extractCode('.js', code)
+    assert.deepEqual(imports, ['./real.js'])
   })
 
   test('Go: every import_spec path, aliased or not', async () => {
@@ -104,16 +109,111 @@ describe('extractImportSpecifiers (tree-sitter)', () => {
       '\t_ "github.com/acme/app/internal/boot"',
       ')'
     ].join('\n')
-    const specs = await extractImportSpecifiers('.go', code)
-    assert.deepEqual(specs.sort(), [
+    const { imports } = await extractCode('.go', code)
+    assert.deepEqual(imports.sort(), [
       'fmt', 'github.com/acme/app/internal/boot', 'github.com/acme/app/internal/queue'
     ])
   })
 
+  test('importNames: JS bindings and Go aliases', async () => {
+    const js = [
+      "import s from './a.js'",
+      "import * as ns from './b.js'",
+      "import { one as uno } from './c.js'",
+      "const d = require('./d.js')"
+    ].join('\n')
+    const { importNames } = await extractCode('.js', js)
+    assert.deepEqual(importNames.sort(), ['d', 'ns', 's', 'uno'])
+
+    const go = 'package main\nimport (\n\tq "path/queue"\n\t"fmt"\n)\n'
+    const { importNames: goNames } = await extractCode('.go', go)
+    assert.deepEqual(goNames.sort(), ['fmt', 'q'])
+  })
+
+  test('JS: named functions, classes, methods, and const functions', async () => {
+    const code = [
+      'export function alpha() {}',
+      'async function beta() {}',
+      'const gamma = () => {}',
+      'const delta = async () => {}',
+      'const plain = 4',
+      'class Widget {',
+      '  spin() {}',
+      '  ["computed"]() {}',
+      '}'
+    ].join('\n')
+    const { symbols } = await extractCode('.js', code)
+    const byName = Object.fromEntries(symbols.map((s) => [s.name, s]))
+    assert.deepEqual(Object.keys(byName).sort(), ['Widget', 'Widget.spin', 'alpha', 'beta', 'delta', 'gamma'])
+    assert.equal(byName.alpha.kind, 'function')
+    assert.equal(byName.Widget.kind, 'class')
+    assert.equal(byName['Widget.spin'].kind, 'method')
+    assert.ok(byName.Widget.lines >= 3)
+    assert.ok(byName.alpha.line < byName.Widget.line)
+  })
+
+  test('Go: functions, receiver methods, and type declarations', async () => {
+    const code = [
+      'package queue',
+      '',
+      'type Queue struct {',
+      '\tn int',
+      '}',
+      '',
+      'func (q *Queue) Run() string {',
+      '\treturn help()',
+      '}',
+      '',
+      'func help() string { return "ok" }'
+    ].join('\n')
+    const { symbols } = await extractCode('.go', code)
+    const byName = Object.fromEntries(symbols.map((s) => [s.name, s]))
+    assert.deepEqual(Object.keys(byName).sort(), ['Queue', 'Queue.Run', 'help'])
+    assert.equal(byName.Queue.kind, 'type')
+    assert.equal(byName['Queue.Run'].kind, 'method')
+    assert.equal(byName.help.kind, 'function')
+  })
+
+  test('calls are captured with position, receiver included', async () => {
+    const code = [
+      'function main() {',
+      '  boot()',
+      '  mod.start()',
+      '  new Widget()',
+      '}',
+      'boot()'
+    ].join('\n')
+    const { calls } = await extractCode('.js', code)
+    const inside = calls.filter((c) => c.row === 1)
+    assert.deepEqual(inside.map((c) => `${c.recv || ''}.${c.name}`), ['.boot'])
+    const qualified = calls.find((c) => c.row === 2)
+    assert.equal(qualified.name, 'start')
+    assert.equal(qualified.recv, 'mod')
+    const constructed = calls.find((c) => c.row === 3)
+    assert.equal(constructed.name, 'Widget')
+    const outside = calls.find((c) => c.row === 5)
+    assert.equal(outside.recv, null)
+  })
+
+  test('Go calls: identifier and package-qualified', async () => {
+    const code = [
+      'package queue',
+      'func Run() {',
+      '\thelp()',
+      '\tlog.Print("x")',
+      '}'
+    ].join('\n')
+    const { calls } = await extractCode('.go', code)
+    const plain = calls.find((c) => c.name === 'help')
+    assert.equal(plain.recv, null)
+    const qualified = calls.find((c) => c.name === 'Print')
+    assert.equal(qualified.recv, 'log')
+  })
+
   test('a syntax error never throws; well-formed imports still come out', async () => {
     const code = "import a from './a.js'\nfunction broken( { no close\n"
-    const specs = await extractImportSpecifiers('.js', code)
-    assert.deepEqual(specs, ['./a.js'])
+    const { imports } = await extractCode('.js', code)
+    assert.deepEqual(imports, ['./a.js'])
   })
 })
 
@@ -218,12 +318,16 @@ describe('buildSourcesGraph', () => {
     write(root, 'README.md', '# app\n')
 
     const { nodes, edges } = await buildSourcesGraph(root)
-    const pairs = edges.map((e) => `${e.from}->${e.to}`).sort()
+    const pairs = edges.map((e) => `${e.from}->${e.to}:${e.type}`).sort()
     assert.deepEqual(pairs, [
-      'main.go->internal/queue/helper.go',
-      'main.go->internal/queue/queue.go'
+      'internal/queue/helper.go->internal/queue/helper.go#help:defines',
+      'internal/queue/queue.go->internal/queue/queue.go#Run:defines',
+      'main.go#main->internal/queue/queue.go#Run:calls',
+      'main.go->internal/queue/helper.go:imports',
+      'main.go->internal/queue/queue.go:imports',
+      'main.go->main.go#main:defines'
     ])
-    assert.equal(nodes.length, 5) // go.mod itself is a file node too
+    assert.equal(nodes.length, 8) // 5 files (incl. go.mod) + 3 defined symbols
   })
 })
 
@@ -242,7 +346,7 @@ describe('syncSourcesToAnchorDB', () => {
   function statefulClient() {
     const records = new Map()
     const edges = new Map()
-    const ops = { linked: [], unlinked: [], saved: [] }
+    const ops = { linked: [], unlinked: [], saved: [], batches: [] }
     return {
       ops,
       records,
@@ -270,6 +374,13 @@ describe('syncSourcesToAnchorDB', () => {
       async saveWithID(name, props) {
         records.set(name, props)
         ops.saved.push(name)
+      },
+      async saveBatch(items) {
+        for (const item of items) {
+          records.set(item.name, item.props)
+          ops.saved.push(item.name)
+        }
+        ops.batches.push(items.length)
       }
     }
   }
@@ -281,7 +392,10 @@ describe('syncSourcesToAnchorDB', () => {
     const client = statefulClient()
     const result = await syncSourcesToAnchorDB(client, root)
 
-    assert.deepEqual(result, { linked: 2, unlinked: 0, saved: 2, tombstoned: 0, failed: 0, nodes: 2, edges: 1 })
+    assert.deepEqual(result, {
+      linked: 2, unlinked: 0, saved: 2, tombstoned: 0, failed: 0, orphans: 0,
+      files: 2, symbols: 0, edges: 1, labels: { written: 0, deleted: 0 }
+    })
     assert.ok(client.ops.linked.includes('a.js\u0000imports\u0000b.js'))
     assert.ok(client.ops.linked.includes('b.js\u0000imported_by\u0000a.js'))
   })
@@ -369,6 +483,319 @@ describe('syncSourcesToAnchorDB', () => {
     const props = client.records.get('b.js')
     assert.equal(props.tombstone, 0)
     assert.ok(Number.isInteger(props.size) && Number.isInteger(props.mtime))
+  })
+
+  test('pending records go through saveBatch in one transactional call', async () => {
+    const root = makeRepo()
+    write(root, 'a.js', "import './b.js'\n")
+    write(root, 'b.js', '')
+    const client = statefulClient()
+
+    const result = await syncSourcesToAnchorDB(client, root)
+    assert.deepEqual(client.ops.batches, [2])
+    assert.equal(result.saved, 2)
+
+    // Nothing changed: the second sync sends no batch at all.
+    const second = await syncSourcesToAnchorDB(client, root)
+    assert.equal(second.saved, 0)
+    assert.deepEqual(client.ops.batches, [2])
+  })
+
+  test('edges whose endpoint failed to save are counted as orphans', async () => {
+    const root = makeRepo()
+    write(root, 'main.js', "import { boot } from './lib/boot.js'\nfunction start() { boot() }\n")
+    write(root, 'lib/boot.js', 'export function boot() { return 1 }\n')
+    const client = statefulClient()
+    client.saveBatch = async () => {
+      throw new Error('batch refused')
+    }
+    const realSave = client.saveWithID.bind(client)
+    client.saveWithID = async (name, props) => {
+      if (name === 'main.js') throw new Error('save rejected')
+      return realSave(name, props)
+    }
+
+    const result = await syncSourcesToAnchorDB(client, root)
+    assert.equal(result.failed, 1)
+    // main.js is not live, so its imports edge and its defines edge dangle;
+    // the calls edge lives on main.js#start, which saved fine.
+    assert.equal(result.orphans, 2)
+  })
+})
+
+describe('symbol graph', () => {
+  function statefulClient() {
+    const records = new Map()
+    const edges = new Map()
+    const ops = { linked: [], unlinked: [], saved: [], batches: [] }
+    return {
+      ops,
+      records,
+      edges,
+      async list() {
+        return {
+          totalCount: records.size,
+          hasMore: false,
+          items: [...records].map(([name, props]) => ({ name, props }))
+        }
+      },
+      async causalChain([seed], relation) {
+        return (edges.get(`${seed}\u0000${relation}`) || []).map((word) => ({ word }))
+      },
+      async link(from, type, to) {
+        const key = `${from}\u0000${type}`
+        edges.set(key, [...(edges.get(key) || []), to])
+        ops.linked.push(`${from}\u0000${type}\u0000${to}`)
+      },
+      async unlink(from, type, to) {
+        const key = `${from}\u0000${type}`
+        edges.set(key, (edges.get(key) || []).filter((word) => word !== to))
+        ops.unlinked.push(`${from}\u0000${type}\u0000${to}`)
+      },
+      async saveWithID(name, props) {
+        records.set(name, props)
+        ops.saved.push(name)
+      },
+      async saveBatch(items) {
+        for (const item of items) {
+          records.set(item.name, item.props)
+          ops.saved.push(item.name)
+        }
+        ops.batches.push(items.length)
+      }
+    }
+  }
+
+  test('buildSourcesGraph emits symbol nodes, defines, and unique-name calls', async () => {
+    const root = makeRepo()
+    write(root, 'main.js', "import { boot } from './lib/boot.js'\nfunction start() { boot() }\n")
+    write(root, 'lib/boot.js', 'export function boot() { return 1 }\n')
+
+    const { nodes, edges } = await buildSourcesGraph(root)
+    const types = nodes.map((n) => `${n.type}:${n.id}`).sort()
+    assert.deepEqual(types, [
+      'file:lib/boot.js',
+      'file:main.js',
+      'symbol:lib/boot.js#boot',
+      'symbol:main.js#start'
+    ])
+    const edgesById = edges.map((e) => `${e.from}->${e.to}:${e.type}`).sort()
+    assert.deepEqual(edgesById, [
+      'lib/boot.js->lib/boot.js#boot:defines',
+      'main.js#start->lib/boot.js#boot:calls',
+      'main.js->lib/boot.js:imports',
+      'main.js->main.js#start:defines'
+    ])
+    // The symbol record's attributes stay numeric-only.
+    const symbolNode = nodes.find((n) => n.type === 'symbol')
+    assert.deepEqual(Object.keys(symbolNode.metadata).sort(), ['line', 'lines'])
+  })
+
+  test('Go calls resolve inside the package directory first', async () => {
+    const root = makeRepo()
+    fs.writeFileSync(path.join(root, 'go.mod'), 'module github.com/acme/app\n', 'utf8')
+    write(root, 'main.go', 'package main\n\nimport "github.com/acme/app/internal/queue"\n\nfunc main() {\n\tqueue.Run()\n}\n')
+    write(root, 'internal/queue/queue.go', 'package queue\n\nfunc Run() string {\n\treturn help()\n}\n\nfunc help() string { return "ok" }\n')
+
+    const { edges } = await buildSourcesGraph(root)
+    const calls = edges.filter((e) => e.type === 'calls').map((e) => `${e.from}->${e.to}`).sort()
+    assert.deepEqual(calls, [
+      'internal/queue/queue.go#Run->internal/queue/queue.go#help',
+      'main.go#main->internal/queue/queue.go#Run'
+    ])
+  })
+
+  test('ambiguous call names are skipped, never guessed', async () => {
+    const root = makeRepo()
+    write(root, 'a.js', 'function reset() { go() }\n')
+    write(root, 'b.js', 'function go() {}\n')
+    write(root, 'c.js', 'function go() {}\n')
+
+    const { edges } = await buildSourcesGraph(root)
+    const calls = edges.filter((e) => e.type === 'calls')
+    assert.deepEqual(calls, [])
+  })
+
+  test('duplicate symbol names in one file get line-suffixed ids', async () => {
+    const root = makeRepo()
+    write(root, 'a.js', 'function walk() { helper() }\nfunction helper() { go() }\nfunction walk() { helper() }\nfunction go() {}\n')
+
+    const { nodes, edges } = await buildSourcesGraph(root)
+    const walkIds = nodes.filter((n) => n.id.startsWith('a.js#walk')).map((n) => n.id).sort()
+    assert.deepEqual(walkIds, ['a.js#walk@1', 'a.js#walk@3'])
+    // Every defines edge points at a distinct record.
+    const defined = edges.filter((e) => e.type === 'defines').map((e) => e.to).sort()
+    assert.deepEqual(defined, ['a.js#go', 'a.js#helper', 'a.js#walk@1', 'a.js#walk@3'])
+    // Calls made from inside a duplicated symbol carry the suffixed id too:
+    // an unsuffixed `a.js#walk` endpoint would dangle on the server.
+    const calls = edges.filter((e) => e.type === 'calls').map((e) => `${e.from}->${e.to}`).sort()
+    assert.deepEqual(calls, [
+      'a.js#helper->a.js#go',
+      'a.js#walk@1->a.js#helper',
+      'a.js#walk@3->a.js#helper'
+    ])
+  })
+
+  test('a receiver call without import evidence is skipped, not guessed', async () => {
+    const root = makeRepo()
+    write(root, 'lib/log.js', 'export function Log() {}\n')
+    write(root, 'app.js', 'function run() { s.Log() }\n')
+
+    const { edges } = await buildSourcesGraph(root)
+    assert.deepEqual(edges.filter((e) => e.type === 'calls'), [])
+  })
+
+  test('a receiver call resolves when the receiver is an import binding', async () => {
+    const root = makeRepo()
+    write(root, 'lib/log.js', 'export function Log() { return 1 }\n')
+    write(root, 'esm.js', "import s from './lib/log.js'\nfunction viaEsm() { s.Log() }\n")
+    write(root, 'ns.js', "import * as ns from './lib/log.js'\nfunction viaNs() { ns.Log() }\n")
+    write(root, 'cjs.js', "const s = require('./lib/log.js')\nfunction viaCjs() { s.Log() }\n")
+
+    const { edges } = await buildSourcesGraph(root)
+    const calls = edges.filter((e) => e.type === 'calls').map((e) => `${e.from}->${e.to}`).sort()
+    assert.deepEqual(calls, [
+      'cjs.js#viaCjs->lib/log.js#Log',
+      'esm.js#viaEsm->lib/log.js#Log',
+      'ns.js#viaNs->lib/log.js#Log'
+    ])
+  })
+
+  test('Go: alias and last path segment count as receiver evidence', async () => {
+    const root = makeRepo()
+    fs.writeFileSync(path.join(root, 'go.mod'), 'module github.com/acme/app\n', 'utf8')
+    write(root, 'main.go', [
+      'package main',
+      'import (',
+      '\tq "github.com/acme/app/internal/queue"',
+      '\t"github.com/acme/app/internal/other"',
+      ')',
+      'func main() {',
+      '\tq.Run()',
+      '\tother.Help()',
+      '\tbogus.Run()',
+      '}'
+    ].join('\n'))
+    write(root, 'internal/queue/queue.go', 'package queue\n\nfunc Run() {}\n')
+    write(root, 'internal/other/other.go', 'package other\n\nfunc Help() {}\n')
+
+    const { edges } = await buildSourcesGraph(root)
+    const calls = edges.filter((e) => e.type === 'calls').map((e) => `${e.from}->${e.to}`).sort()
+    assert.deepEqual(calls, [
+      'main.go#main->internal/other/other.go#Help',
+      'main.go#main->internal/queue/queue.go#Run'
+    ])
+  })
+
+  test('desiredSourceEdgeKeys mirrors every relation type', () => {
+    const keys = desiredSourceEdgeKeys([
+      { from: 'a.js', to: 'b.js', type: 'imports' },
+      { from: 'a.js', to: 'a.js#run', type: 'defines' },
+      { from: 'a.js#run', to: 'b.js#go', type: 'calls' }
+    ])
+    assert.ok(keys.has(edgeKey('a.js', 'imports', 'b.js')))
+    assert.ok(keys.has(edgeKey('b.js', 'imported_by', 'a.js')))
+    assert.ok(keys.has(edgeKey('a.js', 'defines', 'a.js#run')))
+    assert.ok(keys.has(edgeKey('a.js#run', 'defined_in', 'a.js')))
+    assert.ok(keys.has(edgeKey('a.js#run', 'calls', 'b.js#go')))
+    assert.ok(keys.has(edgeKey('b.js#go', 'called_by', 'a.js#run')))
+    assert.equal(keys.size, 6)
+  })
+
+  test('labelContent lists one line per symbol', () => {
+    const text = labelContent('lib/boot.js', [
+      { name: 'boot', kind: 'function', line: 3, lines: 4 },
+      { name: 'Boot.help', kind: 'method', line: 8, lines: 1 }
+    ])
+    assert.equal(text, '# lib/boot.js\n\n- `boot` (function, line 3)\n- `Boot.help` (method, line 8)\n')
+  })
+
+  test('sync stores symbols, links defines and calls, and writes label files', async () => {
+    const root = makeRepo()
+    write(root, 'main.js', "import { boot } from './lib/boot.js'\nfunction start() { boot() }\n")
+    write(root, 'lib/boot.js', 'export function boot() { return 1 }\n')
+    const client = statefulClient()
+
+    const result = await syncSourcesToAnchorDB(client, root)
+    assert.equal(result.files, 2)
+    assert.equal(result.symbols, 2)
+    assert.equal(result.labels.written, 2)
+    assert.ok(client.ops.linked.includes('lib/boot.js\u0000defines\u0000lib/boot.js#boot'))
+    assert.ok(client.ops.linked.includes('lib/boot.js#boot\u0000defined_in\u0000lib/boot.js'))
+    assert.ok(client.ops.linked.includes('main.js#start\u0000calls\u0000lib/boot.js#boot'))
+    assert.ok(client.ops.linked.includes('lib/boot.js#boot\u0000called_by\u0000main.js#start'))
+
+    // Label files mirror the files, under .knowledges/.knl-data.
+    const bootLabel = path.join(root, '.knowledges/.knl-data/lib/boot.js.md')
+    assert.equal(
+      fs.readFileSync(bootLabel, 'utf8'),
+      '# lib/boot.js\n\n- `boot` (function, line 1)\n'
+    )
+    assert.ok(fs.existsSync(path.join(root, '.knowledges/.knl-data/main.js.md')))
+
+    // Idempotent: a second unchanged sync writes and deletes nothing.
+    const second = await syncSourcesToAnchorDB(client, root)
+    assert.deepEqual(second.labels, { written: 0, deleted: 0 })
+    assert.deepEqual(
+      { linked: second.linked, unlinked: second.unlinked, saved: second.saved, failed: second.failed },
+      { linked: 0, unlinked: 0, saved: 0, failed: 0 }
+    )
+  })
+
+  test('a removed symbol is tombstoned; a removed file loses its label file', async () => {
+    const root = makeRepo()
+    write(root, 'main.js', "import { boot } from './lib/boot.js'\nfunction start() { boot() }\n")
+    write(root, 'lib/boot.js', 'export function boot() { return 1 }\n')
+    const client = statefulClient()
+    await syncSourcesToAnchorDB(client, root)
+
+    // The symbol disappears from the file: its record is tombstoned and
+    // its label file is deleted (the file no longer defines any symbol).
+    write(root, 'lib/boot.js', '')
+    const second = await syncSourcesToAnchorDB(client, root)
+    assert.equal(second.tombstoned, 1)
+    assert.equal(client.records.get('lib/boot.js#boot').tombstone, 2)
+    assert.deepEqual(second.labels, { written: 0, deleted: 1 })
+    assert.ok(!fs.existsSync(path.join(root, '.knowledges/.knl-data/lib/boot.js.md')))
+
+    // The file disappears too: its own record is tombstoned as well.
+    fs.rmSync(path.join(root, 'lib/boot.js'))
+    const third = await syncSourcesToAnchorDB(client, root)
+    assert.equal(client.records.get('lib/boot.js').tombstone, 2)
+    assert.deepEqual(third.labels, { written: 0, deleted: 0 })
+  })
+})
+
+describe('traceSources', () => {
+  // Fake server: edges keyed like the real causalChain walks.
+  function chainClient(edges) {
+    const map = new Map()
+    for (const [from, type, to] of edges) {
+      const key = `${from}\u0000${type}`
+      map.set(key, [...(map.get(key) || []), { word: to }])
+    }
+    return {
+      async causalChain([seed], relation) {
+        return map.get(`${seed}\u0000${relation}`) || []
+      }
+    }
+  }
+
+  test('files trace imports; symbol ids trace calls', async () => {
+    const edges = [
+      ['main.js', 'imports', 'lib/boot.js'],
+      ['lib/boot.js', 'imported_by', 'main.js'],
+      ['main.js#boot', 'calls', 'lib/boot.js#boot'],
+      ['lib/boot.js#boot', 'called_by', 'main.js#boot']
+    ]
+    const client = chainClient(edges)
+
+    const fileTrace = await traceSources(client, 'main.js', 'out', 2)
+    assert.deepEqual(fileTrace.out, [['lib/boot.js', 1]])
+
+    const symbolTrace = await traceSources(client, 'main.js#boot', 'both', 2)
+    assert.deepEqual(symbolTrace.out, [['lib/boot.js#boot', 1]])
+    assert.deepEqual(symbolTrace.in, [])
   })
 })
 

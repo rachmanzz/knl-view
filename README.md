@@ -154,14 +154,14 @@ tracing across sessions and shared sync between machines.
 `knl-view install anchordb` installs AnchorDB and writes the `anchordb`
 block into the global config:
 
-- **Linux**: downloads the native binary from
+- **Linux and macOS**: downloads the native binary from
   [GitHub Releases](https://github.com/rachmanzz/anchordb/releases),
   verifies it against the release's `SHA256SUMS.txt`, installs to
   `~/.knlview/bin/`, and starts `anchordb-server` detached (logs in
   `~/.knlview/anchordb.log`, data in `~/.knlview/anchordb-data`).
-- **Other platforms**: AnchorDB needs Linux `mmap`, so it runs as a Linux
-  container from `ghcr.io/rachmanzz/anchordb` via docker or podman — the
-  command refuses to continue if neither is installed.
+- **Other platforms**: a Linux container from
+  `ghcr.io/rachmanzz/anchordb` via docker or podman — the command refuses
+  to continue if neither is installed.
 
 Non-interactive (CI/scripts): add `--yes`. Explicit method: `--method=binary`
 or `--method=container`. Fixed token instead of a random one: `--token=...`.
@@ -301,26 +301,51 @@ claim texts involved. Returns `503` when AnchorDB is off or the
 ### Sources graph (whole project)
 
 A third AnchorDB model, the `sources` role in the models map, holds the
-dependency graph of the whole project, not just `.knowledges`: every file
+dependency graph of the whole project, not just `.knowledges`. Every file
 becomes a node (id = repo-relative path; hidden folders are skipped except
 `.github`, and `node_modules`, `dist`, and `.gitignore` patterns are
-ignored), and import edges are extracted with tree-sitter syntax parsing
-(the JS family and Go today, one grammar package per language). Edges are stored
-in both directions (`imports`, `imported_by`) so lineage works without any
+ignored). Import edges are extracted with tree-sitter syntax parsing (the
+JS family and Go today, one grammar package per language) and stored in
+both directions (`imports`, `imported_by`) so lineage works without any
 local mirror: sync is server-authoritative, enumerating the server's own
 records and edges before applying the difference from a fresh disk scan.
+
+Each file also defines **symbol nodes**, extracted from the same parse:
+
+- Symbol ids are `<path>#<name>`; class methods are `Class.method`. A name
+  defined more than once in one file gets a line suffix
+  (`<path>#<name>@<line>`), so duplicate helpers stay distinct records.
+- Kinds: `function`, `class`, `method`, `type` (Go type declarations).
+- Edges: `defines`/`defined_in` (file → symbol) and `calls`/`called_by`
+  (symbol → symbol), each stored in both directions because causalChain
+  walks forward only.
+- Call resolution is conservative: a call belongs to its innermost
+  enclosing symbol, and the callee must match exactly one definition
+  project-wide (same package directory preferred in Go). A receiver-qualified
+  call (`obj.Method()`) resolves only when the receiver is an import
+  binding of the file — otherwise it is skipped, never guessed.
+- Label text (symbol names and kinds — AnchorDB attributes are
+  numeric-only) is written to `.knowledges/.knl-data/<path>.md`, one file
+  per source file that has symbols; override the location with `labelDir`
+  in the project config. Labels are regenerated and pruned on every sync.
 
 ```sh
 knl-view model new sources
 knl-view sources sync
 knl-view sources trace --target=server/index.js --direction=out --hops=2
+knl-view sources trace --target=server/index.js#handleTrace --direction=in
 ```
 
 `sync` is idempotent: run it again after refactoring and only the
-difference is applied. Removed files lose their edges (the wire protocol
-has no record delete, so an edgeless record is left behind, invisible to
-traces). The read-only HTTP endpoint answers the same queries:
-`GET /api/sources/trace?target=<path>&direction=in|out|both&hops=N`.
+difference is applied. A target containing `#` traces symbol lineage over
+`calls`/`called_by`; a plain path traces file lineage over
+`imports`/`imported_by`. Records the disk no longer has are tombstoned
+(attribute `tombstone = 2`) after their edges are unlinked — the wire
+protocol has no record delete — and a reappearing file lifts the tombstone
+and relinks its edges. Sync reports `ORPHAN EDGES` when an edge endpoint
+failed to save, so a broken sync is never silent. The read-only HTTP
+endpoint answers the same queries:
+`GET /api/sources/trace?target=<id>&direction=in|out|both&hops=N`.
 
 ### CLI Query
 
