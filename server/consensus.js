@@ -48,10 +48,6 @@ export function claimsIndexPath(model, home = null, options = {}) {
   return path.join(knlGlobalDir(home, options), 'claims', `${model}.json`)
 }
 
-export function consensusMirrorPath(model, home = null, options = {}) {
-  return path.join(knlGlobalDir(home, options), 'consensus', `${model}.json`)
-}
-
 /**
  * Read the claim index. Missing file = empty index, not an error.
  * @returns {Promise<{claims: object, error: string|null}>}

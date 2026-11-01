@@ -27,8 +27,7 @@ import { createPathMatcher } from '../config.js'
 
 export const SOURCE_RELATIONS = ['imports', 'imported_by']
 export const SOURCE_TOMBSTONE = 2
-// OpStatus on the wire: 1 = Active, 2 = Archived (TOMBSTONE).
-export const OP_ACTIVE = 1
+// OpStatus on the wire: 2 = Archived (TOMBSTONE).
 export const OP_ARCHIVED = 2
 // Symbol layer, same AnchorDB model as the files: a file defines symbols,
 // symbols call symbols. Mirrored both directions like imports, for the same

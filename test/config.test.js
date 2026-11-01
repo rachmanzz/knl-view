@@ -9,7 +9,6 @@ import {
   globalConfigPath,
   knlGlobalDir,
   syncStatePath,
-  normalizeProjectConfig,
   normalizeModels,
   resolveModel,
   normalizeAnchordb,
