@@ -15,15 +15,26 @@ const require = createRequire(import.meta.url)
 
 const GRAMMAR_WASM = {
   javascript: 'tree-sitter-javascript/tree-sitter-javascript.wasm',
-  go: 'tree-sitter-go/tree-sitter-go.wasm'
+  typescript: 'tree-sitter-typescript/tree-sitter-typescript.wasm',
+  tsx: 'tree-sitter-typescript/tree-sitter-tsx.wasm',
+  go: 'tree-sitter-go/tree-sitter-go.wasm',
+  python: 'tree-sitter-python/tree-sitter-python.wasm',
+  rust: 'tree-sitter-rust/tree-sitter-rust.wasm'
 }
 
-/** The JS family shares one grammar; each other extension has its own. */
+/** The JS/TS, Go, Python, and Rust families; each extension maps to its grammar. */
 export const SYNTAX_LANGUAGES = {
   '.js': 'javascript',
   '.mjs': 'javascript',
   '.cjs': 'javascript',
-  '.go': 'go'
+  '.jsx': 'javascript',
+  '.ts': 'typescript',
+  '.mts': 'typescript',
+  '.cts': 'typescript',
+  '.tsx': 'tsx',
+  '.go': 'go',
+  '.py': 'python',
+  '.rs': 'rust'
 }
 
 let initPromise = null
@@ -68,7 +79,7 @@ function specsFromTree(grammar, tree) {
   const specs = []
   const names = []
   const visit = (node) => {
-    if (grammar === 'javascript') {
+    if (grammar === 'javascript' || grammar === 'typescript' || grammar === 'tsx') {
       if (node.type === 'import_statement' || node.type === 'export_statement') {
         const source = node.childForFieldName('source')
         const fragment = source && firstDescendant(source, 'string_fragment')
@@ -125,6 +136,87 @@ function specsFromTree(grammar, tree) {
           if (alias) names.push(alias.text)
           else names.push(path.slice(path.lastIndexOf('/') + 1))
         }
+      }
+    } else if (grammar === 'python') {
+      if (node.type === 'import_statement') {
+        for (let i = 0; i < node.childCount; i++) {
+          const c = node.child(i)
+          if (c.type === 'dotted_name') {
+            specs.push(c.text)
+            const firstId = c.child(0)
+            if (firstId) names.push(firstId.text)
+          } else if (c.type === 'aliased_import') {
+            const name = c.childForFieldName('name')
+            const alias = c.childForFieldName('alias')
+            if (name) specs.push(name.text)
+            if (alias) names.push(alias.text)
+          }
+        }
+      } else if (node.type === 'import_from_statement') {
+        const mod = node.childForFieldName('module_name')
+        const modText = mod ? mod.text : ''
+        if (modText) specs.push(modText)
+        let pastImport = false
+        for (let i = 0; i < node.childCount; i++) {
+          const c = node.child(i)
+          if (c.type === 'import') {
+            pastImport = true
+            continue
+          }
+          if (!pastImport) continue
+          if (c.type === 'dotted_name') {
+            names.push(c.text)
+            if (modText) specs.push(modText + '.' + c.text)
+          } else if (c.type === 'aliased_import') {
+            const name = c.childForFieldName('name')
+            const alias = c.childForFieldName('alias')
+            if (alias) names.push(alias.text)
+            if (name && modText) specs.push(modText + '.' + name.text)
+          }
+        }
+      }
+    } else if (grammar === 'rust') {
+      if (node.type === 'mod_item') {
+        if (!node.childForFieldName('body')) {
+          const name = node.childForFieldName('name')
+          if (name) {
+            specs.push('./' + name.text)
+            names.push(name.text)
+          }
+        }
+      } else if (node.type === 'use_declaration') {
+        const extractRustUse = (n, prefix = '') => {
+          if (!n) return
+          if (n.type === 'scoped_use_list') {
+            const pathNode = n.childForFieldName('path')
+            const listNode = n.childForFieldName('list')
+            const p = (prefix ? prefix + '::' : '') + (pathNode ? pathNode.text : '')
+            extractRustUse(listNode, p)
+          } else if (n.type === 'use_list') {
+            for (let i = 0; i < n.childCount; i++) {
+              const c = n.child(i)
+              if (c.type === 'identifier' || c.type === 'scoped_identifier' || c.type === 'use_as_clause' || c.type === 'scoped_use_list') {
+                extractRustUse(c, prefix)
+              }
+            }
+          } else if (n.type === 'use_as_clause') {
+            const pathNode = n.childForFieldName('path')
+            const aliasNode = n.childForFieldName('alias')
+            const full = (prefix ? prefix + '::' : '') + (pathNode ? pathNode.text : '')
+            specs.push(full)
+            if (aliasNode) names.push(aliasNode.text)
+          } else if (n.type === 'scoped_identifier') {
+            const full = (prefix ? prefix + '::' : '') + n.text
+            specs.push(full)
+            const name = n.childForFieldName('name')
+            if (name) names.push(name.text)
+          } else if (n.type === 'identifier') {
+            const full = (prefix ? prefix + '::' : '') + n.text
+            specs.push(full)
+            names.push(n.text)
+          }
+        }
+        extractRustUse(node.childForFieldName('argument'))
       }
     }
     for (let i = 0; i < node.childCount; i++) visit(node.child(i))
@@ -195,7 +287,7 @@ function structureFromTree(grammar, tree) {
     })
   }
   const visit = (node, cls) => {
-    if (grammar === 'javascript') {
+    if (grammar === 'javascript' || grammar === 'typescript' || grammar === 'tsx') {
       if (node.type === 'function_declaration' || node.type === 'generator_function_declaration') {
         const name = node.childForFieldName('name')
         if (name) pushSymbol(node, name.text, 'function')
@@ -220,6 +312,15 @@ function structureFromTree(grammar, tree) {
             pushSymbol(declarator, name.text, 'function')
           }
         }
+      } else if (node.type === 'interface_declaration') {
+        const name = node.childForFieldName('name')
+        if (name) pushSymbol(node, name.text, 'interface')
+      } else if (node.type === 'type_alias_declaration') {
+        const name = node.childForFieldName('name')
+        if (name) pushSymbol(node, name.text, 'type')
+      } else if (node.type === 'enum_declaration') {
+        const name = node.childForFieldName('name')
+        if (name) pushSymbol(node, name.text, 'enum')
       }
     } else if (grammar === 'go') {
       if (node.type === 'function_declaration') {
@@ -234,18 +335,97 @@ function structureFromTree(grammar, tree) {
         const name = node.childForFieldName('name')
         if (name) pushSymbol(node, name.text, 'type')
       }
+    } else if (grammar === 'python') {
+      if (node.type === 'class_definition') {
+        const name = node.childForFieldName('name')
+        if (name) {
+          pushSymbol(node, name.text, 'class')
+          cls = name.text
+        }
+      } else if (node.type === 'function_definition') {
+        const name = node.childForFieldName('name')
+        if (name) {
+          if (cls) pushSymbol(node, `${cls}.${name.text}`, 'method')
+          else pushSymbol(node, name.text, 'function')
+        }
+      }
+    } else if (grammar === 'rust') {
+      if (node.type === 'struct_item') {
+        const name = node.childForFieldName('name')
+        if (name) pushSymbol(node, name.text, 'struct')
+      } else if (node.type === 'enum_item') {
+        const name = node.childForFieldName('name')
+        if (name) pushSymbol(node, name.text, 'enum')
+      } else if (node.type === 'trait_item') {
+        const name = node.childForFieldName('name')
+        if (name) pushSymbol(node, name.text, 'trait')
+      } else if (node.type === 'type_item') {
+        const name = node.childForFieldName('name')
+        if (name) pushSymbol(node, name.text, 'type')
+      } else if (node.type === 'impl_item') {
+        const typeNode = node.childForFieldName('type')
+        if (typeNode) cls = typeNode.text
+      } else if (node.type === 'function_item') {
+        const name = node.childForFieldName('name')
+        if (name) {
+          if (cls) pushSymbol(node, `${cls}.${name.text}`, 'method')
+          else pushSymbol(node, name.text, 'function')
+        }
+      }
     }
-    if (node.type === 'call_expression' || node.type === 'new_expression') {
-      const fn = node.type === 'call_expression'
-        ? node.childForFieldName('function')
-        : node.childForFieldName('constructor')
-      if (fn) {
-        if (fn.type === 'identifier') {
-          calls.push({ name: fn.text, recv: null, row: node.startPosition.row })
-        } else if (fn.type === 'member_expression' || fn.type === 'selector_expression') {
-          const named = fn.namedChildren
-          if (named.length >= 2) {
-            calls.push({ name: named[named.length - 1].text, recv: named[0].text, row: node.startPosition.row })
+
+    if (grammar === 'python') {
+      if (node.type === 'call') {
+        const fn = node.childForFieldName('function')
+        if (fn) {
+          if (fn.type === 'identifier') {
+            calls.push({ name: fn.text, recv: null, row: node.startPosition.row })
+          } else if (fn.type === 'attribute') {
+            const obj = fn.childForFieldName('object')
+            const attr = fn.childForFieldName('attribute')
+            if (attr) {
+              calls.push({ name: attr.text, recv: obj ? obj.text : null, row: node.startPosition.row })
+            }
+          }
+        }
+      }
+    } else if (grammar === 'rust') {
+      if (node.type === 'call_expression') {
+        const fn = node.childForFieldName('function')
+        if (fn) {
+          if (fn.type === 'identifier') {
+            calls.push({ name: fn.text, recv: null, row: node.startPosition.row })
+          } else if (fn.type === 'field_expression') {
+            const val = fn.childForFieldName('value')
+            const field = fn.childForFieldName('field')
+            if (field) {
+              calls.push({ name: field.text, recv: val ? val.text : null, row: node.startPosition.row })
+            }
+          } else if (fn.type === 'scoped_identifier') {
+            const pathNode = fn.childForFieldName('path')
+            const nameNode = fn.childForFieldName('name')
+            if (nameNode) {
+              const recv = pathNode
+                ? (pathNode.type === 'scoped_identifier' ? (pathNode.childForFieldName('name') || pathNode).text : pathNode.text)
+                : null
+              calls.push({ name: nameNode.text, recv, row: node.startPosition.row })
+            }
+          }
+        }
+      }
+    } else {
+      if (node.type === 'call_expression' || node.type === 'new_expression') {
+        const fn = node.type === 'call_expression'
+          ? node.childForFieldName('function')
+          : node.childForFieldName('constructor')
+        if (fn) {
+          if (fn.type === 'identifier') {
+            calls.push({ name: fn.text, recv: null, row: node.startPosition.row })
+          } else if (fn.type === 'member_expression' || fn.type === 'selector_expression') {
+            const named = fn.namedChildren
+            if (named.length >= 2) {
+              calls.push({ name: named[named.length - 1].text, recv: named[0].text, row: node.startPosition.row })
+            }
           }
         }
       }

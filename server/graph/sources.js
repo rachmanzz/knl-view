@@ -48,7 +48,7 @@ const REVERSE_EDGE = {
 const DEFAULT_LABEL_DIR = '.knowledges/.knl-data'
 const DEFAULT_IGNORES = ['node_modules', 'dist', 'build', 'coverage']
 
-const JS_EXTS = new Set(['.js', '.mjs', '.cjs'])
+const JS_TS_EXTS = new Set(['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'])
 
 /** One ignore rule after parsing a .gitignore line. */
 function ignoreRule(line) {
@@ -215,15 +215,106 @@ export function resolveGoSpecifiers(spec, modulePath, files) {
 
 /**
  * Resolve one relative specifier from file `fromRel` against the set of
- * scanned files. Tries the exact path, the JS extensions, and an index
- * file inside the directory.
+ * scanned files. Tries the exact path, JS/TS extension fallbacks (including
+ * mapping .js specifiers in TS ESM to .ts/.tsx on disk), and directory index files.
  */
 export function resolveImportSpecifier(fromRel, spec, files) {
   const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), spec))
   const candidates = [base]
-  for (const ext of JS_EXTS) candidates.push(base + ext)
-  for (const ext of JS_EXTS) candidates.push(`${base}/index${ext}`)
+  if (base.endsWith('.js')) {
+    candidates.push(base.slice(0, -3) + '.ts', base.slice(0, -3) + '.tsx')
+  } else if (base.endsWith('.mjs')) {
+    candidates.push(base.slice(0, -4) + '.mts')
+  } else if (base.endsWith('.cjs')) {
+    candidates.push(base.slice(0, -4) + '.cts')
+  }
+  for (const ext of JS_TS_EXTS) candidates.push(base + ext)
+  for (const ext of JS_TS_EXTS) candidates.push(`${base}/index${ext}`)
   return candidates.find((candidate) => files[candidate]) || null
+}
+
+/**
+ * Resolve Python import specifiers: relative dots (e.g. .local, ..utils) and
+ * module paths (e.g. pkg.sub) to .py or /__init__.py files in scanned files.
+ */
+export function resolvePySpecifiers(fromRel, specs, files) {
+  const dir = path.posix.dirname(fromRel)
+  const resolved = []
+  for (const spec of specs) {
+    const candidates = []
+    const m = spec.match(/^(\.+)(.*)$/)
+    if (m) {
+      const dotCount = m[1].length
+      const rest = m[2].replace(/\./g, '/')
+      let targetDir = dir
+      for (let i = 1; i < dotCount; i++) targetDir = path.posix.dirname(targetDir)
+      const base = rest ? path.posix.normalize(path.posix.join(targetDir, rest)) : targetDir
+      candidates.push(base + '.py', path.posix.join(base, '__init__.py'))
+    } else {
+      const asPath = spec.replace(/\./g, '/')
+      candidates.push(
+        asPath + '.py',
+        path.posix.join(asPath, '__init__.py'),
+        path.posix.normalize(path.posix.join(dir, asPath)) + '.py',
+        path.posix.normalize(path.posix.join(dir, asPath, '__init__.py'))
+      )
+    }
+    const found = candidates.find((c) => files[c])
+    if (found && !resolved.includes(found)) resolved.push(found)
+  }
+  return resolved
+}
+
+/**
+ * Resolve Rust import specifiers: `crate::`, `super::`, `self::`, and `./`
+ * (from `mod foo;`) to .rs or /mod.rs files in scanned files.
+ */
+export function resolveRustSpecifiers(fromRel, specs, files) {
+  const dir = path.posix.dirname(fromRel)
+  let crateRoot = '.'
+  const srcIdx = fromRel.indexOf('src/')
+  if (srcIdx >= 0) {
+    crateRoot = fromRel.slice(0, srcIdx + 3)
+  }
+  const resolved = []
+  for (const spec of specs) {
+    const candidates = []
+    if (spec.startsWith('crate::')) {
+      const rest = spec.slice('crate::'.length).split('::').join('/')
+      const parts = rest.split('/')
+      for (let i = parts.length; i >= 1; i--) {
+        const sub = parts.slice(0, i).join('/')
+        candidates.push(
+          path.posix.normalize(path.posix.join(crateRoot, sub)) + '.rs',
+          path.posix.normalize(path.posix.join(crateRoot, sub, 'mod.rs'))
+        )
+      }
+    } else if (spec.startsWith('super::')) {
+      const rest = spec.slice('super::'.length).split('::').join('/')
+      const parentDir = path.posix.dirname(dir)
+      const parts = rest.split('/')
+      for (let i = parts.length; i >= 1; i--) {
+        const sub = parts.slice(0, i).join('/')
+        candidates.push(
+          path.posix.normalize(path.posix.join(parentDir, sub)) + '.rs',
+          path.posix.normalize(path.posix.join(parentDir, sub, 'mod.rs'))
+        )
+      }
+    } else if (spec.startsWith('self::') || spec.startsWith('./')) {
+      const raw = spec.startsWith('self::') ? spec.slice('self::'.length).split('::').join('/') : spec.slice(2)
+      const parts = raw.split('/')
+      for (let i = parts.length; i >= 1; i--) {
+        const sub = parts.slice(0, i).join('/')
+        candidates.push(
+          path.posix.normalize(path.posix.join(dir, sub)) + '.rs',
+          path.posix.normalize(path.posix.join(dir, sub, 'mod.rs'))
+        )
+      }
+    }
+    const found = candidates.find((c) => files[c])
+    if (found && !resolved.includes(found)) resolved.push(found)
+  }
+  return resolved
 }
 
 /**
@@ -281,9 +372,16 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
   }
 
   for (const [rel, file] of Object.entries(structure)) {
-    const targets = file.ext === '.go'
-      ? file.imports.flatMap((spec) => resolveGoSpecifiers(spec, file.modulePath, scanned))
-      : resolveJsSpecifiers(rel, file.imports, scanned)
+    let targets = []
+    if (file.ext === '.go') {
+      targets = file.imports.flatMap((spec) => resolveGoSpecifiers(spec, file.modulePath, scanned))
+    } else if (file.ext === '.py') {
+      targets = resolvePySpecifiers(rel, file.imports, scanned)
+    } else if (file.ext === '.rs') {
+      targets = resolveRustSpecifiers(rel, file.imports, scanned)
+    } else {
+      targets = resolveJsSpecifiers(rel, file.imports, scanned)
+    }
     for (const target of targets) {
       if (target && target !== rel) edges.push({ from: rel, to: target, type: 'imports' })
     }

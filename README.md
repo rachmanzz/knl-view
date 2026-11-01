@@ -27,6 +27,8 @@ knl-view --port 8086 --path=.knowledges
   that narrows the index by file title or path.
 - Interface in English or Indonesian, switchable in the top bar. English is the
   default.
+- Whole-project dependency and symbol call graph extraction via WebAssembly
+  Tree-Sitter for JavaScript, TypeScript, Go, Python, and Rust.
 
 ## Requirements
 
@@ -370,18 +372,19 @@ A third AnchorDB model, the `sources` role in the models map, holds the
 dependency graph of the whole project, not just `.knowledges`. Every file
 becomes a node (id = repo-relative path; hidden folders are skipped except
 `.github`, and `node_modules`, `dist`, and `.gitignore` patterns are
-ignored). Import edges are extracted with tree-sitter syntax parsing (the
-JS family and Go today, one grammar package per language) and stored in
-both directions (`imports`, `imported_by`) so lineage works without any
-local mirror: sync is server-authoritative, enumerating the server's own
-records and edges before applying the difference from a fresh disk scan.
+ignored). Import edges are extracted with tree-sitter syntax parsing
+(JavaScript, TypeScript/TSX, Go, Python, and Rust, one grammar package per
+language family) and stored in both directions (`imports`, `imported_by`) so
+lineage works without any local mirror: sync is server-authoritative, enumerating
+the server's own records and edges before applying the difference from a fresh
+disk scan.
 
 Each file also defines **symbol nodes**, extracted from the same parse:
 
 - Symbol ids are `<path>#<name>`; class methods are `Class.method`. A name
   defined more than once in one file gets a line suffix
   (`<path>#<name>@<line>`), so duplicate helpers stay distinct records.
-- Kinds: `function`, `class`, `method`, `type` (Go type declarations).
+- Kinds: `function`, `class`, `method`, `type`, `interface`, `enum`, `struct`, `trait`.
 - Edges: `defines`/`defined_in` (file → symbol) and `calls`/`called_by`
   (symbol → symbol), each stored in both directions because causalChain
   walks forward only.
@@ -394,6 +397,28 @@ Each file also defines **symbol nodes**, extracted from the same parse:
   numeric-only) is written to `.knowledges/.knl-data/<path>.md`, one file
   per source file that has symbols; override the location with `labelDir`
   in the project config. Labels are regenerated and pruned on every sync.
+
+#### Supported Languages (v0.2.0)
+
+Tree-sitter WASM grammars run in-memory within Node.js without requiring host compilers:
+
+| Language | Extensions | Extracted Symbols | Import Resolution |
+| :--- | :--- | :--- | :--- |
+| **JavaScript** | `.js`, `.mjs`, `.cjs`, `.jsx` | `function`, `class`, `method` | ESM (`import`/`export`), dynamic `import()`, CJS `require()` |
+| **TypeScript** | `.ts`, `.mts`, `.cts`, `.tsx` | `function`, `class`, `method`, `interface`, `type`, `enum` | ESM/CJS, automatic resolution of `.js` specifiers to `.ts`/`.tsx` on disk |
+| **Go** | `.go` | `function`, `method` (receiver-qualified), `type` | `go.mod` module-internal packages |
+| **Python** | `.py` | `function`, `class`, `method` | Relative imports (`.local`, `..pkg`) and dot-separated package paths |
+| **Rust** | `.rs` | `function`, `method` (`impl`), `struct`, `enum`, `trait`, `type` | `mod <name>;`, `use crate::`, `use super::`, `use self::` |
+
+#### Upcoming Languages (Planned for Next Versions)
+
+Support for additional languages via WebAssembly Tree-Sitter grammars will be added in upcoming releases:
+
+- **Java** (`.java`): Class, interface, record, method extraction, package imports
+- **C / C++** (`.c`, `.h`, `.cpp`, `.hpp`): Functions, structs, classes, `#include` resolution
+- **C#** (`.cs`): Classes, structs, interfaces, methods, namespaces/using
+- **Ruby** (`.rb`): Modules, classes, methods, `require_relative`
+- **PHP** (`.php`): Classes, interfaces, traits, functions, namespaces/use
 
 ```sh
 knl-view model new sources

@@ -8,6 +8,8 @@ import {
   resolveImportSpecifier,
   resolveJsSpecifiers,
   resolveGoSpecifiers,
+  resolvePySpecifiers,
+  resolveRustSpecifiers,
   goModulePath,
   buildSourcesGraph,
   desiredSourceEdgeKeys,
@@ -210,6 +212,133 @@ describe('extractCode (tree-sitter)', () => {
     assert.equal(qualified.recv, 'log')
   })
 
+  test('TS: interfaces, types, enums, functions, and imports', async () => {
+    const code = [
+      "import { config, run as exec } from './core.js'",
+      "import type { Settings } from './types.js'",
+      "import def from './default.js'",
+      'export interface User { id: string; name: string }',
+      'export type UserID = string',
+      'export enum Status { Active, Inactive }',
+      'export class Manager {',
+      '  handle() { exec() }',
+      '}',
+      'export function init() { def() }'
+    ].join('\n')
+    const { imports, importNames, symbols, calls } = await extractCode('.ts', code)
+    assert.deepEqual(imports.sort(), ['./core.js', './default.js', './types.js'])
+    assert.deepEqual(importNames.sort(), ['Settings', 'config', 'def', 'exec'])
+    const byName = Object.fromEntries(symbols.map((s) => [s.name, s]))
+    assert.deepEqual(Object.keys(byName).sort(), ['Manager', 'Manager.handle', 'Status', 'User', 'UserID', 'init'])
+    assert.equal(byName.User.kind, 'interface')
+    assert.equal(byName.UserID.kind, 'type')
+    assert.equal(byName.Status.kind, 'enum')
+    assert.equal(byName.Manager.kind, 'class')
+    assert.equal(byName['Manager.handle'].kind, 'method')
+    assert.equal(byName.init.kind, 'function')
+    const callNames = calls.map((c) => c.name).sort()
+    assert.deepEqual(callNames, ['def', 'exec'])
+  })
+
+  test('TSX: components and calls', async () => {
+    const code = [
+      "import React from 'react'",
+      "import { Button } from './ui/button.js'",
+      'export function App() {',
+      '  Button()',
+      '  return null',
+      '}'
+    ].join('\n')
+    const { imports, symbols, calls } = await extractCode('.tsx', code)
+    assert.deepEqual(imports.sort(), ['./ui/button.js', 'react'])
+    assert.equal(symbols[0].name, 'App')
+    assert.equal(symbols[0].kind, 'function')
+    assert.equal(calls[0].name, 'Button')
+  })
+
+  test('Python: imports, classes, functions, methods, and calls', async () => {
+    const code = [
+      'import os',
+      'import sys as system',
+      'from .local import helper, util as u',
+      'from pkg.sub import something',
+      '',
+      'class Greeter:',
+      '    def greet(self):',
+      '        helper()',
+      '        u.call()',
+      '',
+      'def top_func():',
+      '    pass'
+    ].join('\n')
+    const { imports, importNames, symbols, calls } = await extractCode('.py', code)
+    assert.deepEqual(imports.sort(), [
+      '.local',
+      '.local.helper',
+      '.local.util',
+      'os',
+      'pkg.sub',
+      'pkg.sub.something',
+      'sys'
+    ])
+    assert.deepEqual(importNames.sort(), ['helper', 'os', 'something', 'system', 'u'])
+    const byName = Object.fromEntries(symbols.map((s) => [s.name, s]))
+    assert.deepEqual(Object.keys(byName).sort(), ['Greeter', 'Greeter.greet', 'top_func'])
+    assert.equal(byName.Greeter.kind, 'class')
+    assert.equal(byName['Greeter.greet'].kind, 'method')
+    assert.equal(byName.top_func.kind, 'function')
+    const plainCall = calls.find((c) => c.name === 'helper')
+    assert.equal(plainCall.recv, null)
+    const attrCall = calls.find((c) => c.name === 'call')
+    assert.equal(attrCall.recv, 'u')
+  })
+
+  test('Rust: use, mod, structs, traits, impl methods, and calls', async () => {
+    const code = [
+      'mod helper;',
+      'use crate::utils::{calc, format as fmt};',
+      'use super::parent_item;',
+      'use std::collections::HashMap;',
+      '',
+      'pub struct Config {',
+      '    pub name: String,',
+      '}',
+      '',
+      'pub trait Processor {',
+      '    fn process(&self);',
+      '}',
+      '',
+      'impl Config {',
+      '    pub fn new() -> Self {',
+      '        calc();',
+      '        fmt.format();',
+      '        Config { name: String::new() }',
+      '    }',
+      '}',
+      '',
+      'pub fn run() {}'
+    ].join('\n')
+    const { imports, importNames, symbols, calls } = await extractCode('.rs', code)
+    assert.deepEqual(imports.sort(), [
+      './helper',
+      'crate::utils::calc',
+      'crate::utils::format',
+      'std::collections::HashMap',
+      'super::parent_item'
+    ])
+    assert.deepEqual(importNames.sort(), ['HashMap', 'calc', 'fmt', 'helper', 'parent_item'])
+    const byName = Object.fromEntries(symbols.map((s) => [s.name, s]))
+    assert.deepEqual(Object.keys(byName).sort(), ['Config', 'Config.new', 'Processor', 'run'])
+    assert.equal(byName.Config.kind, 'struct')
+    assert.equal(byName.Processor.kind, 'trait')
+    assert.equal(byName['Config.new'].kind, 'method')
+    assert.equal(byName.run.kind, 'function')
+    const plainCall = calls.find((c) => c.name === 'calc')
+    assert.equal(plainCall.recv, null)
+    const fieldCall = calls.find((c) => c.name === 'format')
+    assert.equal(fieldCall.recv, 'fmt')
+  })
+
   test('a syntax error never throws; well-formed imports still come out', async () => {
     const code = "import a from './a.js'\nfunction broken( { no close\n"
     const { imports } = await extractCode('.js', code)
@@ -278,7 +407,9 @@ describe('resolveImportSpecifier', () => {
   const files = {
     'src/a.js': {},
     'src/lib/b.js': {},
-    'src/lib/c/index.js': {}
+    'src/lib/c/index.js': {},
+    'src/component.tsx': {},
+    'src/service.ts': {}
   }
 
   test('exact, extension, and index resolution relative to the importer', () => {
@@ -287,6 +418,55 @@ describe('resolveImportSpecifier', () => {
     assert.equal(resolveImportSpecifier('src/x.js', './lib/b.js', files), 'src/lib/b.js')
     assert.equal(resolveImportSpecifier('src/x.js', './lib/c', files), 'src/lib/c/index.js')
     assert.equal(resolveImportSpecifier('src/x.js', '../other/missing.js', files), null)
+  })
+
+  test('resolves .js specifiers to .ts or .tsx files on disk for TS ESM', () => {
+    assert.equal(resolveImportSpecifier('src/main.ts', './service.js', files), 'src/service.ts')
+    assert.equal(resolveImportSpecifier('src/main.ts', './component.js', files), 'src/component.tsx')
+    assert.equal(resolveImportSpecifier('src/main.ts', './component', files), 'src/component.tsx')
+  })
+})
+
+describe('resolvePySpecifiers', () => {
+  const files = {
+    'app/services/auth.py': {},
+    'app/services/helper.py': {},
+    'app/utils.py': {},
+    'app/__init__.py': {},
+    'main.py': {}
+  }
+
+  test('resolves relative dots and package paths', () => {
+    assert.deepEqual(resolvePySpecifiers('app/services/auth.py', ['.helper'], files), ['app/services/helper.py'])
+    assert.deepEqual(resolvePySpecifiers('app/services/auth.py', ['..utils'], files), ['app/utils.py'])
+    assert.deepEqual(resolvePySpecifiers('main.py', ['app.utils'], files), ['app/utils.py'])
+    assert.deepEqual(resolvePySpecifiers('main.py', ['app.services.auth'], files), ['app/services/auth.py'])
+  })
+
+  test('external and missing imports resolve to empty list', () => {
+    assert.deepEqual(resolvePySpecifiers('main.py', ['os', 'sys', 'numpy'], files), [])
+    assert.deepEqual(resolvePySpecifiers('main.py', ['.missing'], files), [])
+  })
+})
+
+describe('resolveRustSpecifiers', () => {
+  const files = {
+    'src/main.rs': {},
+    'src/utils.rs': {},
+    'src/services/auth.rs': {},
+    'src/services/helper.rs': {},
+    'src/models/user.rs': {}
+  }
+
+  test('resolves crate::, super::, self::, and mod relative paths', () => {
+    assert.deepEqual(resolveRustSpecifiers('src/services/auth.rs', ['crate::models::user'], files), ['src/models/user.rs'])
+    assert.deepEqual(resolveRustSpecifiers('src/services/auth.rs', ['crate::utils'], files), ['src/utils.rs'])
+    assert.deepEqual(resolveRustSpecifiers('src/services/auth.rs', ['super::utils'], files), ['src/utils.rs'])
+    assert.deepEqual(resolveRustSpecifiers('src/services/auth.rs', ['./helper'], files), ['src/services/helper.rs'])
+  })
+
+  test('external crates resolve to empty list', () => {
+    assert.deepEqual(resolveRustSpecifiers('src/main.rs', ['std::fmt', 'tokio::sync::Mutex'], files), [])
   })
 })
 
@@ -328,6 +508,69 @@ describe('buildSourcesGraph', () => {
       'main.go->main.go#main:defines'
     ])
     assert.equal(nodes.length, 8) // 5 files (incl. go.mod) + 3 defined symbols
+  })
+
+  test('TypeScript repo: builds imports, defines, and calls edges', async () => {
+    const root = makeRepo()
+    write(root, 'src/service.ts', "export function calculate() { return 42 }\n")
+    write(root, 'src/main.ts', [
+      "import { calculate } from './service.js'",
+      "export function run() {",
+      "  calculate()",
+      "}"
+    ].join('\n'))
+
+    const { nodes, edges } = await buildSourcesGraph(root)
+    const pairs = edges.map((e) => `${e.from}->${e.to}:${e.type}`).sort()
+    assert.deepEqual(pairs, [
+      'src/main.ts#run->src/service.ts#calculate:calls',
+      'src/main.ts->src/main.ts#run:defines',
+      'src/main.ts->src/service.ts:imports',
+      'src/service.ts->src/service.ts#calculate:defines'
+    ])
+    assert.equal(nodes.length, 4) // 2 files + 2 symbols
+  })
+
+  test('Python repo: builds imports, defines, and calls edges', async () => {
+    const root = makeRepo()
+    write(root, 'app/helper.py', "def help():\n    pass\n")
+    write(root, 'app/main.py', [
+      "from .helper import help",
+      "def run():",
+      "    help()"
+    ].join('\n'))
+
+    const { nodes, edges } = await buildSourcesGraph(root)
+    const pairs = edges.map((e) => `${e.from}->${e.to}:${e.type}`).sort()
+    assert.deepEqual(pairs, [
+      'app/helper.py->app/helper.py#help:defines',
+      'app/main.py#run->app/helper.py#help:calls',
+      'app/main.py->app/helper.py:imports',
+      'app/main.py->app/main.py#run:defines'
+    ])
+    assert.equal(nodes.length, 4) // 2 files + 2 symbols
+  })
+
+  test('Rust repo: builds mod/use imports, defines, and calls edges', async () => {
+    const root = makeRepo()
+    write(root, 'src/helper.rs', "pub fn help() {}\n")
+    write(root, 'src/main.rs', [
+      "mod helper;",
+      "use crate::helper::help;",
+      "pub fn run() {",
+      "    help();",
+      "}"
+    ].join('\n'))
+
+    const { nodes, edges } = await buildSourcesGraph(root)
+    const pairs = edges.map((e) => `${e.from}->${e.to}:${e.type}`).sort()
+    assert.deepEqual(pairs, [
+      'src/helper.rs->src/helper.rs#help:defines',
+      'src/main.rs#run->src/helper.rs#help:calls',
+      'src/main.rs->src/helper.rs:imports',
+      'src/main.rs->src/main.rs#run:defines'
+    ])
+    assert.equal(nodes.length, 4) // 2 files + 2 symbols
   })
 })
 

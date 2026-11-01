@@ -1,6 +1,6 @@
 {
   "name": "@rahmantech/knl-view",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local viewer for .knowledges knowledge bases: a CLI and a web app, with an optional AnchorDB graph layer.",
   "type": "module",
   "license": "Apache-2.0",
@@ -26,6 +26,7 @@
   "scripts": {
     "dev": "node scripts/dev.js",
     "build": "vite build",
+    "test": "node --test test/*.test.js",
     "start": "node bin/knl-view.js"
   },
   "engines": {
@@ -39,6 +40,9 @@
     "react-dom": "^19.3.1",
     "tree-sitter-go": "^0.25.0",
     "tree-sitter-javascript": "^0.25.0",
+    "tree-sitter-python": "^0.25.0",
+    "tree-sitter-rust": "^0.24.0",
+    "tree-sitter-typescript": "^0.23.2",
     "web-tree-sitter": "^0.27.1"
   },
   "devDependencies": {
