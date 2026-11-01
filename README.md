@@ -1,79 +1,43 @@
 # knl-view
 
-A local viewer for `.knowledges` knowledge bases: a CLI that serves a small web
-app over a plain folder of Markdown files. The disk is the source of truth;
-`map.json` is optional decoration.
+A local viewer and graph engine for `.knowledges` knowledge bases: a CLI that serves a small web app over a plain folder of Markdown files and tracks project architecture lineage. The disk is the source of truth; `map.json` is optional decoration.
 
-```
+```sh
 knl-view --port 8086 --path=.knowledges
 ```
 
+## Collaboration Model: Human, AI, and AnchorDB
+
+`knl-view` is built around a practical three-way collaboration model that aligns AI coding agents with human intent while keeping context windows clean and efficient:
+
+### 1. The Human Foundation (`.knowledges`)
+- **Single Source of Truth**: The human architect defines the system architecture, domain constraints, feature roadmaps, and audit notes in `.knowledges/`.
+- **Human-in-the-Loop**: AI agents can assist in drafting and organizing documentation, but the human validates and approves business logic and architectural boundaries. This ensures coding agents have an unambiguous reference rather than guessing intent.
+
+### 2. Decision History (`decision-history`)
+- **Traceable Decision Records**: Major architectural choices, technical trade-offs, and strategic pivots are recorded as append-only records using the [`decision-history`](https://github.com/rachmanzz/decisionskills) skill.
+- **Context Continuity**: Future AI agent sessions read these records to understand *why* specific patterns exist, preventing agents from re-introducing rejected approaches or modifying agreed-upon architectures without context.
+
+### 3. Graph Storage & Dependency Efficiency (`AnchorDB`)
+- **Structured Dependency Graphs**: AnchorDB stores indexed relationships for project source code (`sources`) and third-party libraries (`modules-npm`, `modules-go`, etc.) as nodes and edges.
+- **Targeted Lineage Queries**: Instead of dumping large code files or entire dependency trees into LLM context, AI agents query specific caller/callee and import relationships via `knl-view sources trace` and `knl-view modules trace`.
+- **Pre-Edit Impact Analysis**: Agents identify the exact blast radius of changes before modifying code, speeding up dependency analysis and conserving context tokens without guessing.
+
+### 4. Autonomous Agent Execution
+- Standardized operating rules are seeded into `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and project skills via `knl-view setup`.
+- AI coding agents (Antigravity, Claude Code, Cursor, OpenCode) execute graph traces before editing, build module graphs on-demand, and sync changes back to AnchorDB autonomously. Developers assign tasks normally while agents manage graph operations in the background.
+
 ## What it does
 
-- Serves a web viewer over any folder of Markdown files. No database, no build
-  step for your content, no account.
-- Sidebar tree with a fixed `index` entry (the root `README.md`) and a
-  `contents` entry that lists the whole base on one page.
+- Serves a web viewer over any folder of Markdown files. No database, no build step for your content, no account.
+- Sidebar tree with a fixed `index` entry (the root `README.md`) and a `contents` entry that lists the whole base on one page.
 - Folders open their own `README.md`, rendered the same way as a normal document.
-- `map.json` (optional) relabels, reorders, or hides entries in the menu. It
-  never creates, moves, or deletes files. Entries pointing at paths that are not
-  on disk are ignored silently.
-- Markdown with GFM tables, and triple-backtick fences tagged `mermaid` rendered
-  as diagrams. The mermaid bundle is served locally and loaded only when a
-  document contains a diagram; nothing is fetched from a CDN.
-- Per-diagram controls: toggle between diagram and source, and a zoom modal
-  (wheel zoom, drag to pan, +/−/Reset, Esc to close).
-- Table of contents per document, breadcrumb, and a filter box in the sidebar
-  that narrows the index by file title or path.
-- Interface in English or Indonesian, switchable in the top bar. English is the
-  default.
-- Whole-project dependency and symbol call graph extraction via WebAssembly
-  Tree-Sitter for JavaScript, TypeScript, Go, Python, and Rust.
-
-## Requirements
-
-- Node.js 20.19 or newer.
-- A built frontend. `dist/` is committed to this repository, so an install from
-  GitHub already has it. The CLI refuses to start without it and tells you so.
-
-## Install
-
-```sh
-npm install -g @rahmantech/knl-view
-```
-
-That puts the `knl-view` command into Node's global bin,
-`$(npm prefix -g)/bin`. If that directory is not on your PATH, link the
-command somewhere that is:
-
-```sh
-ln -s "$(npm prefix -g)/bin/knl-view" ~/.local/bin/knl-view
-```
-
-The published tarball ships the built `dist/`, so the install compiles
-nothing.
-
-Run it once without installing:
-
-```sh
-npx @rahmantech/knl-view
-```
-
-Or install from source, for a local checkout or an unreleased commit:
-
-```sh
-git clone https://github.com/rachmanzz/knl-view.git
-cd knl-view
-npm install
-npm run build
-npm link
-```
-
-`npm link` puts `knl-view` on your PATH from the checkout. To install a
-GitHub commit without cloning, run
-`npm install -g github:rachmanzz/knl-view --install-links`; without
-`--install-links`, npm 11 links against a temporary clone it deletes
-afterwards, which leaves a broken install.
+- `map.json` (optional) relabels, reorders, or hides entries in the menu. It never creates, moves, or deletes files. Entries pointing at paths that are not on disk are ignored silently.
+- Markdown with GFM tables, and triple-backtick fences tagged `mermaid` rendered as diagrams. The mermaid bundle is served locally and loaded only when a document contains a diagram; nothing is fetched from a CDN.
+- Per-diagram controls: toggle between diagram and source, and a zoom modal (wheel zoom, drag to pan, +/−/Reset, Esc to close).
+- Table of contents per document, breadcrumb, and a filter box in the sidebar that narrows the index by file title or path.
+- Interface in English or Indonesian, switchable in the top bar. English is the default.
+- Whole-project dependency and symbol call graph extraction via WebAssembly Tree-Sitter for JavaScript, TypeScript, Go, Python, and Rust.
 
 ## How to Set Up
 
@@ -103,6 +67,45 @@ After setup, start the viewer immediately:
 ```sh
 knl-view
 ```
+
+## Requirements & Installation
+
+### Requirements
+
+- Node.js 20.19 or newer.
+- A built frontend. `dist/` is committed to this repository, so an install from GitHub already has it. The CLI refuses to start without it and tells you so.
+
+### Install
+
+```sh
+npm install -g @rahmantech/knl-view
+```
+
+That puts the `knl-view` command into Node's global bin, `$(npm prefix -g)/bin`. If that directory is not on your PATH, link the command somewhere that is:
+
+```sh
+ln -s "$(npm prefix -g)/bin/knl-view" ~/.local/bin/knl-view
+```
+
+The published tarball ships the built `dist/`, so the install compiles nothing.
+
+Run it once without installing:
+
+```sh
+npx @rahmantech/knl-view
+```
+
+Or install from source, for a local checkout or an unreleased commit:
+
+```sh
+git clone https://github.com/rachmanzz/knl-view.git
+cd knl-view
+npm install
+npm run build
+npm link
+```
+
+`npm link` puts `knl-view` on your PATH from the checkout. To install a GitHub commit without cloning, run `npm install -g github:rachmanzz/knl-view --install-links`; without `--install-links`, npm 11 links against a temporary clone it deletes afterwards, which leaves a broken install.
 
 ## Usage
 
@@ -136,62 +139,179 @@ knl-view --seed-skill=knl-view --dir=global --yes
 | `--help`, `-h` | | Show help |
 | `--version`, `-v` | | Show version |
 
-The server binds to `127.0.0.1` by default, so it is reachable only from your
-machine unless you pass `--host` yourself. There is no authentication; treat
-`--host 0.0.0.0` as a decision you are making on purpose.
+The server binds to `127.0.0.1` by default, so it is reachable only from your machine unless you pass `--host` yourself. There is no authentication; treat `--host 0.0.0.0` as a decision you are making on purpose.
 
-## Configuration
+## How a Knowledge Base is Read
 
-Two optional config files. A missing file is never an error; a broken file is
-ignored with one warning on stderr. CLI flags always win over config values.
+A base is an ordinary folder:
 
-**Global (`~/.knlview/knl-config.json`)**: shared by every project on the
-machine. Holds the `anchordb` block. Without it, AnchorDB stays completely
-off and the viewer runs fully local:
+```
+.knowledges/
+  README.md          # the index document
+  map.json           # optional
+  roadmap/
+    README.md
+    q1.md
+  features/
+    auth.md
+```
+
+Reading order: the root `README.md`, then `map.json` when present, then the structure on disk. Without `map.json`, menu labels fall back to the first `# heading` of each file, then to the plain file name (files before folders).
+
+### map.json
+
+Every entry is decoration. Nothing in it can invent a file that is not on disk.
 
 ```json
 {
-  "anchordb": {
-    "url": "wire://127.0.0.1:17448",
-    "token": "your-token",
-    "sync": true,
-    "deamon": "podman",
-    "container_name": "anchordb-knlview",
-    "container_id": "56519e7acbaa...",
-    "container_created_on": "2026-10-31 14:08:48..."
+  "title": "Base title shown in the masthead",
+  "sections": {
+    "roadmap": { "title": "Roadmap", "order": 1, "meta": "Where this is going" }
+  },
+  "docs": {
+    "coding-rules.md": { "title": "Coding rules", "order": 1 }
+  },
+  "files": {
+    "secret.md": { "ignore": true }
+  },
+  "dirs": {
+    "old-drafts": { "ignore": true }
   }
 }
 ```
 
-**Per project: `knl-config.json` at the project root** (gitignored):
-`path`, `port`, `host`, `models`, and optional `include` / `exclude` patterns:
+| Field | Applies to | Effect |
+| --- | --- | --- |
+| `title` | the whole file | Masthead title; wins over the README heading |
+| `sections.<dir>` / `dirs.<path>` | a directory | `title` is the menu label, `meta` is a short note |
+| `docs.<file>` / `files.<path>` | a file | `title` is the menu label |
+| `order` | any entry | Ascending menu order; entries without `order` follow, files before folders |
+| `ignore` (or `hidden`) | any entry | `true` hides it from the menu, lists, search, home, and contents |
 
-```json
-{
-  "port": 8091,
-  "models": {
-    "knowledges": "vez0vqrp",
-    "consensus": "n0qrnmsz"
-  },
-  "include": ["dist/bundle.js"],
-  "exclude": ["legacy/**", "*.tmp"]
-}
+Paths are relative to the `.knowledges` root, use `/` separators, and must match the on-disk path exactly, for example `features/auth.md`. `ignore` is view-only: the file stays on disk. Remove the flag to bring it back.
+
+The full field reference lives in the bundled skill: `.agents/skills/knl-view/SKILL.md`.
+
+## AI Graph & Decision Tracing
+
+`knl-view` includes an AI-native directed acyclic graph (DAG) engine built directly into the CLI and server. It connects knowledge documents (`.knowledges/*.md`) and architectural decision records (`.knowledges/decisions/*.md`) into a unified graph:
+
+- **Zero Intermediary File**: Fully on-the-fly in-memory processing. Markdown files remain the sole source of truth without generating out-of-sync `graph.json` cache files.
+- **Decision Lineage Tracking**: Automatically discovers `supersedes`, `related_to`, and `affects_knowledge` edges from `decisionskills` decision blocks.
+- **Low-Token Subgraphs for AI**: Instead of loading an entire knowledge base into LLM context, query exact $N$-hop subgraphs in sub-milliseconds (< 1 ms).
+
+This engine is fully local: it needs no AnchorDB and no network. AnchorDB (see the optional install below) adds persistence on top: edges survive across sessions, are synced incrementally, and can be traced from any machine pointing at the same server.
+
+### Two-way lineage
+
+Traces walk in a mechanically defined direction relative to the edges, never interpreted as cause and effect (`depends_on` edges *leave* a decision while pointing at its upstream, so up/down labels would lie):
+
+- `direction=out`: edges leaving the target: what it supersedes, `depends_on`, or affects.
+- `direction=in`: edges entering the target: what references or replaces it.
+- `direction=both`: the default for the local graph trace; the full neighborhood.
+
+Every returned node carries `via` (`center`, `in`, `out`, or `in+out`) telling how it connects to the trace center.
+
+CLI: `knl-view graph trace --target=<id> --direction=out`  
+HTTP: `GET /api/graph/trace?target=<id>&direction=in`
+
+The AnchorDB endpoint adds the same parameter, `GET /api/anchordb/trace?target=<id>&direction=in|out|both` (default `out`): `out` is scored server-side via `causalChain`; `in` is walked backwards from the local sync mirror; the wire protocol has no reverse query, and the mirror holds every edge this project ever linked, so it is exactly the inbound map for this project's model. Mirror results carry score 1 and the response reports `mirrored: true`/`false` so consumers know which half came from where.
+
+### Consensus (claims)
+
+A second AnchorDB model, the `consensus` role in the project's models map, holds agreement and conflict between *claims*: short statements that are content-addressed (`c-` + 16 hex chars of the statement's hash), so the same text is the same claim on every machine. Claims relate only to other claims, through two fixed relation types: `agrees_with` and `contradicts`. The consensus structure lives purely in AnchorDB; the local artifacts (claim index in `~/.knlview/claims/`, edge mirror in `~/.knlview/sync-state/`) are caches that degrade convenience, never the data.
+
+A claim's status is derived from who points at it: any incoming `contradicts` makes it `disputed`, otherwise any incoming `agrees_with` makes it `consensus`, otherwise it is `uncontested`.
+
+```sh
+knl-view consensus claim "We use bcrypt for password hashing"
+knl-view consensus agree c-a1b2c3d4e5f6a1b2 c-437ff9f10f83edde
+knl-view consensus contradict c-a1b2c3d4e5f6a1b2 c-437ff9f10f83edde
+knl-view consensus retract c-a1b2c3d4e5f6a1b2 c-437ff9f10f83edde
+knl-view consensus status c-437ff9f10f83edde
+knl-view consensus list
 ```
 
-- `exclude`: Hard exclude that strictly filters files and folders from graph analysis and knowledge tree. Always takes precedence over defaults and includes.
-- `include`: Whitelists files and folders. Overrides default directory exclusions (e.g. including files from `dist/` or dot-folders).
+Mutations are CLI-only on purpose: one write path, one mirror kept honest. The read-only HTTP endpoint answers "is this claim settled?":
 
-Model names are owned by the `models` map: role → name, and the name can
-be anything (random names are fine; the map records what each name is
-*for*). Names stay stable even if the project folder is renamed. knl-view
-never invents names by itself: create them with
-`knl-view model new <role>` (writes the map and the global registry), and
-inspect ownership with `knl-view model check`.
+`GET /api/consensus?target=<claimId>` returns the claim's `status`, `supporters`, `objectors`, its own `stance`, `mirrored` (whether a valid local mirror backs the inbound half), and a `statements` map of the claim texts involved. Returns `503` when AnchorDB is off or the `consensus` role is not mapped.
 
-The global registry `~/.knlview/models.json` records every name's owner
-(project, role, path) and warns when two projects claim the same name. A
-project whose map has no entry for a role runs fully local: AnchorDB is
-touched only once the role is mapped.
+### Sources graph (whole project)
+
+A third AnchorDB model, the `sources` role in the models map, holds the dependency graph of the whole project, not just `.knowledges`. Every file becomes a node (id = repo-relative path; hidden folders are skipped except `.github`, and `node_modules`, `dist`, and `.gitignore` patterns are ignored). Import edges are extracted with tree-sitter syntax parsing (JavaScript, TypeScript/TSX, Go, Python, and Rust, one grammar package per language family) and stored in both directions (`imports`, `imported_by`) so lineage works without any local mirror: sync is server-authoritative, enumerating the server's own records and edges before applying the difference from a fresh disk scan.
+
+Each file also defines **symbol nodes**, extracted from the same parse:
+
+- Symbol ids are `<path>#<name>`; class methods are `Class.method`. A name defined more than once in one file gets a line suffix (`<path>#<name>@<line>`), so duplicate helpers stay distinct records.
+- Kinds: `function`, `class`, `method`, `type`, `interface`, `enum`, `struct`, `trait`.
+- Edges: `defines`/`defined_in` (file → symbol) and `calls`/`called_by` (symbol → symbol), each stored in both directions because causalChain walks forward only.
+- Call resolution is conservative: a call belongs to its innermost enclosing symbol, and the callee must match exactly one definition project-wide (same package directory preferred in Go). A receiver-qualified call (`obj.Method()`) resolves only when the receiver is an import binding of the file, otherwise it is skipped, never guessed.
+- Label text (symbol names and kinds; AnchorDB attributes are numeric-only) is written to `.knowledges/.knl-data/<path>.md`, one file per source file that has symbols; override the location with `labelDir` in the project config. Labels are regenerated and pruned on every sync.
+
+#### Supported Languages (v0.3.0)
+
+Tree-sitter WASM grammars run in-memory within Node.js without requiring host compilers:
+
+| Language | Extensions | Extracted Symbols | Import Resolution |
+| :--- | :--- | :--- | :--- |
+| **JavaScript** | `.js`, `.mjs`, `.cjs`, `.jsx` | `function`, `class`, `method` | ESM (`import`/`export`), dynamic `import()`, CJS `require()` |
+| **TypeScript** | `.ts`, `.mts`, `.cts`, `.tsx` | `function`, `class`, `method`, `interface`, `type`, `enum` | ESM/CJS, automatic resolution of `.js` specifiers to `.ts`/`.tsx` on disk |
+| **Go** | `.go` | `function`, `method` (receiver-qualified), `type` | `go.mod` module-internal packages |
+| **Python** | `.py` | `function`, `class`, `method` | Relative imports (`.local`, `..pkg`) and dot-separated package paths |
+| **Rust** | `.rs` | `function`, `method` (`impl`), `struct`, `enum`, `trait`, `type` | `mod <name>;`, `use crate::`, `use super::`, `use self::` |
+
+#### Upcoming Languages (Planned for Next Versions)
+
+Support for additional languages via WebAssembly Tree-Sitter grammars will be added in upcoming releases:
+
+- **Java** (`.java`): Class, interface, record, method extraction, package imports
+- **C / C++** (`.c`, `.h`, `.cpp`, `.hpp`): Functions, structs, classes, `#include` resolution
+- **C#** (`.cs`): Classes, structs, interfaces, methods, namespaces/using
+- **Ruby** (`.rb`): Modules, classes, methods, `require_relative`
+- **PHP** (`.php`): Classes, interfaces, traits, functions, namespaces/use
+
+```sh
+knl-view model new sources
+knl-view sources sync
+knl-view sources collect
+knl-view sources trace --target=server/index.js --direction=out --hops=2
+knl-view sources trace --target=server/index.js#handleTrace --direction=in
+```
+
+`sync` is idempotent: run it again after refactoring and only the difference is applied. A target containing `#` traces symbol lineage over `calls`/`called_by`; a plain path traces file lineage over `imports`/`imported_by`. Records the disk no longer has are archived with the native lifecycle opcode 2 (TOMBSTONE: the server hides them from list and lookups) after their edges are unlinked, and the `tombstone = 2` attribute stays as a marker for servers that predate opcode support. `sync` then asks the REST collector to purge those records physically (scoped to the model); run `knl-view sources collect` by hand if the REST endpoint was unreachable at that moment. A reappearing file revives the record with a normal save and relinks its edges. Sync reports `ORPHAN EDGES` when an edge endpoint failed to save, so a broken sync is never silent. The read-only HTTP endpoint answers the same queries: `GET /api/sources/trace?target=<id>&direction=in|out|both&hops=N`.
+
+### External Modules Graph (On-Demand Module Boundary)
+
+AI agents can parse, index, and trace third-party dependencies on-demand into dedicated global AnchorDB models (`modules-npm`, `modules-go`, `modules-cargo`, `modules-pypi`) without polluting the local project graph or re-syncing across projects:
+
+```sh
+# Build & sync external module graph on-demand
+knl-view modules build-graph npm::express
+knl-view modules build-graph go::github.com/gin-gonic/gin
+
+# Trace definitions and call hierarchy within the module
+knl-view modules trace npm::express Router --hops=1
+
+# List locally indexed modules in ~/.knlview/modules
+knl-view modules list
+```
+
+### CLI Query
+
+```sh
+knl-view graph trace --target=DEC-20261030-135001 --hops=1
+```
+
+Outputs a compact JSON subgraph to `stdout` containing the focal node and all direct dependencies/impacted components.
+
+### HTTP Endpoints
+
+When `knl-view` is running as a local server:
+- `GET /api/graph`: Returns the entire knowledge and decision graph structure.
+- `GET /api/graph/trace?target=<id>&hops=2`: Returns an isolated $N$-hop neighborhood subgraph for AI agents or interactive visualization.
+- `GET /api/anchordb/trace?target=<id>&hops=2`: Returns a causal chain traced on the AnchorDB server (requires the global `anchordb` config block). Returns `503` when AnchorDB is off or unreachable.
+- `GET /api/consensus?target=<claimId>`: Read-only consensus status for one claim (requires AnchorDB and a mapped `consensus` role). Returns `503` when AnchorDB is off or the role is unmapped, `400` without a target.
+- `GET /api/sources/trace?target=<path>&direction=in|out&hops=2`: Read-only file lineage over the whole-project sources graph (requires AnchorDB and a mapped `sources` role). Returns `503` when unavailable, `400` without a target or with a bad direction.
 
 ## Operating System Support & Installing AnchorDB
 
@@ -236,245 +356,47 @@ Run `knl-view install anchordb` to install AnchorDB and write the `anchordb` blo
 - Port conflict handling: automatically detects if port 17448 is occupied and suggests alternative free ports.
 - Data safety: if a container named `anchordb-knlview` already exists, the installer stops rather than overwriting existing data.
 
-## How a base is read
+## Configuration
 
-A base is an ordinary folder:
+Two optional config files. A missing file is never an error; a broken file is ignored with one warning on stderr. CLI flags always win over config values.
 
-```
-.knowledges/
-  README.md          # the index document
-  map.json           # optional
-  roadmap/
-    README.md
-    q1.md
-  features/
-    auth.md
-```
-
-Reading order: the root `README.md`, then `map.json` when present, then the
-structure on disk. Without `map.json`, menu labels fall back to the first
-`# heading` of each file, then to the plain file name (files before folders).
-
-### map.json
-
-Every entry is decoration. Nothing in it can invent a file that is not on disk.
+**Global (`~/.knlview/knl-config.json`)**: shared by every project on the machine. Holds the `anchordb` block. Without it, AnchorDB stays completely off and the viewer runs fully local:
 
 ```json
 {
-  "title": "Base title shown in the masthead",
-  "sections": {
-    "roadmap": { "title": "Roadmap", "order": 1, "meta": "Where this is going" }
-  },
-  "docs": {
-    "coding-rules.md": { "title": "Coding rules", "order": 1 }
-  },
-  "files": {
-    "secret.md": { "ignore": true }
-  },
-  "dirs": {
-    "old-drafts": { "ignore": true }
+  "anchordb": {
+    "url": "wire://127.0.0.1:17448",
+    "token": "your-token",
+    "sync": true,
+    "deamon": "podman",
+    "container_name": "anchordb-knlview",
+    "container_id": "56519e7acbaa...",
+    "container_created_on": "2026-10-31 14:08:48..."
   }
 }
 ```
 
-| Field | Applies to | Effect |
-| --- | --- | --- |
-| `title` | the whole file | Masthead title; wins over the README heading |
-| `sections.<dir>` / `dirs.<path>` | a directory | `title` is the menu label, `meta` is a short note |
-| `docs.<file>` / `files.<path>` | a file | `title` is the menu label |
-| `order` | any entry | Ascending menu order; entries without `order` follow, files before folders |
-| `ignore` (or `hidden`) | any entry | `true` hides it from the menu, lists, search, home, and contents |
+**Per project: `knl-config.json` at the project root** (gitignored):
+`path`, `port`, `host`, `models`, and optional `include` / `exclude` patterns:
 
-Paths are relative to the `.knowledges` root, use `/` separators, and must
-match the on-disk path exactly, for example `features/auth.md`. `ignore` is
-view-only: the file stays on disk. Remove the flag to bring it back.
-
-The full field reference lives in the bundled skill:
-`.agents/skills/knl-view/SKILL.md`.
-
-## AI Graph & Decision Tracing
-
-`knl-view` includes an AI-native directed acyclic graph (DAG) engine built directly into the CLI and server. It connects knowledge documents (`.knowledges/*.md`) and architectural decision records (`.knowledges/decisions/*.md`) into a unified graph:
-
-- **Zero Intermediary File**: Fully on-the-fly in-memory processing. Markdown files remain the sole source of truth without generating out-of-sync `graph.json` cache files.
-- **Decision Lineage Tracking**: Automatically discovers `supersedes`, `related_to`, and `affects_knowledge` edges from `decisionskills` decision blocks.
-- **Low-Token Subgraphs for AI**: Instead of loading an entire knowledge base into LLM context, query exact $N$-hop subgraphs in sub-milliseconds (< 1 ms).
-
-This engine is fully local: it needs no AnchorDB and no network. AnchorDB
-(see the optional install above) adds persistence on top: edges survive
-across sessions, are synced incrementally, and can be traced from any
-machine pointing at the same server.
-
-### Two-way lineage
-
-Traces walk in a mechanically defined direction relative to the edges,
-never interpreted as cause and effect (`depends_on` edges *leave* a
-decision while pointing at its upstream, so up/down labels would lie):
-
-- `direction=out`: edges leaving the target: what it supersedes,
-  `depends_on`, or affects.
-- `direction=in`: edges entering the target: what references or
-  replaces it.
-- `direction=both`: the default for the local graph trace; the full
-  neighborhood.
-
-Every returned node carries `via` (`center`, `in`, `out`, or `in+out`)
-telling how it connects to the trace center.
-
-CLI: `knl-view graph trace --target=<id> --direction=out`
-HTTP: `GET /api/graph/trace?target=<id>&direction=in`
-
-The AnchorDB endpoint adds the same parameter,
-`GET /api/anchordb/trace?target=<id>&direction=in|out|both` (default
-`out`): `out` is scored server-side via `causalChain`; `in` is walked
-backwards from the local sync mirror; the wire protocol has no reverse
-query, and the mirror holds every edge this project ever linked, so it
-is exactly the inbound map for this project's model. Mirror results
-carry score 1 and the response reports `mirrored: true`/`false` so
-consumers know which half came from where.
-
-### Consensus (claims)
-
-A second AnchorDB model, the `consensus` role in the project's models map,
-holds agreement and conflict between *claims*: short statements that are
-content-addressed (`c-` + 16 hex chars of the statement's hash), so the same
-text is the same claim on every machine. Claims relate only to other claims,
-through two fixed relation types: `agrees_with` and `contradicts`. The
-consensus structure lives purely in AnchorDB; the local artifacts (claim
-index in `~/.knlview/claims/`, edge mirror in `~/.knlview/sync-state/`) are
-caches that degrade convenience, never the data.
-
-A claim's status is derived from who points at it: any incoming `contradicts`
-makes it `disputed`, otherwise any incoming `agrees_with` makes it
-`consensus`, otherwise it is `uncontested`.
-
-```sh
-knl-view consensus claim "We use bcrypt for password hashing"
-knl-view consensus agree c-a1b2c3d4e5f6a1b2 c-437ff9f10f83edde
-knl-view consensus contradict c-a1b2c3d4e5f6a1b2 c-437ff9f10f83edde
-knl-view consensus retract c-a1b2c3d4e5f6a1b2 c-437ff9f10f83edde
-knl-view consensus status c-437ff9f10f83edde
-knl-view consensus list
+```json
+{
+  "port": 8091,
+  "models": {
+    "knowledges": "vez0vqrp",
+    "consensus": "n0qrnmsz"
+  },
+  "include": ["dist/bundle.js"],
+  "exclude": ["legacy/**", "*.tmp"]
+}
 ```
 
-Mutations are CLI-only on purpose: one write path, one mirror kept honest.
-The read-only HTTP endpoint answers "is this claim settled?":
+- `exclude`: Hard exclude that strictly filters files and folders from graph analysis and knowledge tree. Always takes precedence over defaults and includes.
+- `include`: Whitelists files and folders. Overrides default directory exclusions (e.g. including files from `dist/` or dot-folders).
 
-`GET /api/consensus?target=<claimId>` returns the claim's `status`,
-`supporters`, `objectors`, its own `stance`, `mirrored` (whether a valid
-local mirror backs the inbound half), and a `statements` map of the
-claim texts involved. Returns `503` when AnchorDB is off or the
-`consensus` role is not mapped.
+Model names are owned by the `models` map: role → name, and the name can be anything (random names are fine; the map records what each name is *for*). Names stay stable even if the project folder is renamed. knl-view never invents names by itself: create them with `knl-view model new <role>` (writes the map and the global registry), and inspect ownership with `knl-view model check`.
 
-### Sources graph (whole project)
-
-A third AnchorDB model, the `sources` role in the models map, holds the
-dependency graph of the whole project, not just `.knowledges`. Every file
-becomes a node (id = repo-relative path; hidden folders are skipped except
-`.github`, and `node_modules`, `dist`, and `.gitignore` patterns are
-ignored). Import edges are extracted with tree-sitter syntax parsing
-(JavaScript, TypeScript/TSX, Go, Python, and Rust, one grammar package per
-language family) and stored in both directions (`imports`, `imported_by`) so
-lineage works without any local mirror: sync is server-authoritative, enumerating
-the server's own records and edges before applying the difference from a fresh
-disk scan.
-
-Each file also defines **symbol nodes**, extracted from the same parse:
-
-- Symbol ids are `<path>#<name>`; class methods are `Class.method`. A name
-  defined more than once in one file gets a line suffix
-  (`<path>#<name>@<line>`), so duplicate helpers stay distinct records.
-- Kinds: `function`, `class`, `method`, `type`, `interface`, `enum`, `struct`, `trait`.
-- Edges: `defines`/`defined_in` (file → symbol) and `calls`/`called_by`
-  (symbol → symbol), each stored in both directions because causalChain
-  walks forward only.
-- Call resolution is conservative: a call belongs to its innermost
-  enclosing symbol, and the callee must match exactly one definition
-  project-wide (same package directory preferred in Go). A receiver-qualified
-  call (`obj.Method()`) resolves only when the receiver is an import
-  binding of the file, otherwise it is skipped, never guessed.
-- Label text (symbol names and kinds; AnchorDB attributes are
-  numeric-only) is written to `.knowledges/.knl-data/<path>.md`, one file
-  per source file that has symbols; override the location with `labelDir`
-  in the project config. Labels are regenerated and pruned on every sync.
-
-#### Supported Languages (v0.3.0)
-
-Tree-sitter WASM grammars run in-memory within Node.js without requiring host compilers:
-
-| Language | Extensions | Extracted Symbols | Import Resolution |
-| :--- | :--- | :--- | :--- |
-| **JavaScript** | `.js`, `.mjs`, `.cjs`, `.jsx` | `function`, `class`, `method` | ESM (`import`/`export`), dynamic `import()`, CJS `require()` |
-| **TypeScript** | `.ts`, `.mts`, `.cts`, `.tsx` | `function`, `class`, `method`, `interface`, `type`, `enum` | ESM/CJS, automatic resolution of `.js` specifiers to `.ts`/`.tsx` on disk |
-| **Go** | `.go` | `function`, `method` (receiver-qualified), `type` | `go.mod` module-internal packages |
-| **Python** | `.py` | `function`, `class`, `method` | Relative imports (`.local`, `..pkg`) and dot-separated package paths |
-| **Rust** | `.rs` | `function`, `method` (`impl`), `struct`, `enum`, `trait`, `type` | `mod <name>;`, `use crate::`, `use super::`, `use self::` |
-
-#### Upcoming Languages (Planned for Next Versions)
-
-Support for additional languages via WebAssembly Tree-Sitter grammars will be added in upcoming releases:
-
-- **Java** (`.java`): Class, interface, record, method extraction, package imports
-- **C / C++** (`.c`, `.h`, `.cpp`, `.hpp`): Functions, structs, classes, `#include` resolution
-- **C#** (`.cs`): Classes, structs, interfaces, methods, namespaces/using
-- **Ruby** (`.rb`): Modules, classes, methods, `require_relative`
-- **PHP** (`.php`): Classes, interfaces, traits, functions, namespaces/use
-
-```sh
-knl-view model new sources
-knl-view sources sync
-knl-view sources collect
-knl-view sources trace --target=server/index.js --direction=out --hops=2
-knl-view sources trace --target=server/index.js#handleTrace --direction=in
-```
-
-`sync` is idempotent: run it again after refactoring and only the
-difference is applied. A target containing `#` traces symbol lineage over
-`calls`/`called_by`; a plain path traces file lineage over
-`imports`/`imported_by`. Records the disk no longer has are archived with
-the native lifecycle opcode 2 (TOMBSTONE: the server hides them from list
-and lookups) after their edges are unlinked, and the `tombstone = 2`
-attribute stays as a marker for servers that predate opcode support.
-`sync` then asks the REST collector to purge those records physically
-(scoped to the model); run `knl-view sources collect` by hand if the REST
-endpoint was unreachable at that moment. A reappearing file revives the
-record with a normal save and relinks its edges. Sync reports
-`ORPHAN EDGES` when an edge endpoint failed to save, so a broken sync is
-never silent. The read-only HTTP endpoint answers the same queries:
-`GET /api/sources/trace?target=<id>&direction=in|out|both&hops=N`.
-
-### External Modules Graph (On-Demand Module Boundary)
-
-AI agents can parse, index, and trace third-party dependencies on-demand into dedicated global AnchorDB models (`modules-npm`, `modules-go`, `modules-cargo`, `modules-pypi`) without polluting the local project graph or re-syncing across projects:
-
-```sh
-# Build & sync external module graph on-demand
-knl-view modules build-graph npm::express
-knl-view modules build-graph go::github.com/gin-gonic/gin
-
-# Trace definitions and call hierarchy within the module
-knl-view modules trace npm::express Router --hops=1
-
-# List locally indexed modules in ~/.knlview/modules
-knl-view modules list
-```
-
-### CLI Query
-
-```sh
-knl-view graph trace --target=DEC-20261030-135001 --hops=1
-```
-
-Outputs a compact JSON subgraph to `stdout` containing the focal node and all direct dependencies/impacted components.
-
-### HTTP Endpoints
-
-When `knl-view` is running as a local server:
-- `GET /api/graph`: Returns the entire knowledge and decision graph structure.
-- `GET /api/graph/trace?target=<id>&hops=2`: Returns an isolated $N$-hop neighborhood subgraph for AI agents or interactive visualization.
-- `GET /api/anchordb/trace?target=<id>&hops=2`: Returns a causal chain traced on the AnchorDB server (requires the global `anchordb` config block). Returns `503` when AnchorDB is off or unreachable.
-- `GET /api/consensus?target=<claimId>`: Read-only consensus status for one claim (requires AnchorDB and a mapped `consensus` role). Returns `503` when AnchorDB is off or the role is unmapped, `400` without a target.
-- `GET /api/sources/trace?target=<path>&direction=in|out&hops=2`: Read-only file lineage over the whole-project sources graph (requires AnchorDB and a mapped `sources` role). Returns `503` when unavailable, `400` without a target or with a bad direction.
+The global registry `~/.knlview/models.json` records every name's owner (project, role, path) and warns when two projects claim the same name. A project whose map has no entry for a role runs fully local: AnchorDB is touched only once the role is mapped.
 
 ## Development
 
@@ -482,18 +404,13 @@ When `knl-view` is running as a local server:
 npm run dev
 ```
 
-Starts the API on port 8085 (override with `PORT`) and the Vite dev server on
-5173 (override with `WEB_PORT`). Pass a base folder as the first argument:
+Starts the API on port 8085 (override with `PORT`) and the Vite dev server on 5173 (override with `WEB_PORT`). Pass a base folder as the first argument:
 
 ```sh
 npm run dev -- ../some-project/.knowledges
 ```
 
-`dist/` is committed to this repository so that installs straight from GitHub
-keep working, because npm runs no build step for a git install without a
-`prepare` script. After changing the frontend, run `npm run build` and commit
-the result together with the source, or those installs stay on the previous
-build.
+`dist/` is committed to this repository so that installs straight from GitHub keep working, because npm runs no build step for a git install without a `prepare` script. After changing the frontend, run `npm run build` and commit the result together with the source, or those installs stay on the previous build.
 
 ## License
 
