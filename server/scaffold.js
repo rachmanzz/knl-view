@@ -366,6 +366,12 @@ file or symbol is tombstoned (attribute \`tombstone = 2\`) after its
 edges are unlinked; if it comes back, the tombstone lifts and the edges
 are relinked.
 
+External modules graph (third-party dependencies): stored in global AnchorDB
+models per ecosystem (\`modules-npm\`, \`modules-go\`, \`modules-cargo\`, \`modules-pypi\`)
+and cataloged in \`~/.knlview/modules/<eco>.json\`. Built on-demand via
+\`knl-view modules build-graph <eco>::<name>\`, avoiding polluting project models.
+Traceable via \`knl-view modules trace <eco>::<name> [symbol]\`.
+
 Decision history skill: recording architectural decisions is delegated
 to the separate decision-history skill (its decision block format is its
 own domain; this skill never writes decision blocks). If it is not
@@ -454,6 +460,10 @@ this.
 - Before renaming a symbol or moving it to another file: remember its
   record id contains the old name/path. Sync tombstones the stale record
   and creates the new one; trace by the new id afterwards.
+- Before reading raw third-party library source files:
+  run \`knl-view modules build-graph <eco>::<module>\` (e.g. \`npm::express\`, \`go::github.com/gin-gonic/gin\`)
+  to index it on-demand into global AnchorDB model \`modules-<eco>\`, then trace
+  its methods with \`knl-view modules trace <eco>::<module> [symbol]\` to save context tokens.
 - A new architectural decision: trigger the decision-history skill
   (install it first if missing; see "Decision history skill" above).
   The decision block format is that skill's domain; this skill never

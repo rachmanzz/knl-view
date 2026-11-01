@@ -22,6 +22,17 @@ import {
 import { readProjectConfig, readGlobalConfig, projectSlug, anchordbClientOptions, resolveModel, resolveSettings, knlGlobalDir, globalConfigPath } from '../server/config.js'
 import { createAnchorWireClient, mirrorStillValid } from '../server/graph/anchordb_client.js'
 import { syncSourcesToAnchorDB, traceSources, purgeArchivedRecords } from '../server/graph/sources.js'
+import {
+  parseModuleSpecifier,
+  buildModuleGraph,
+  syncModuleToAnchorDB,
+  traceModuleSymbol
+} from '../server/graph/modules_builder.js'
+import {
+  readModulesCatalog,
+  defaultEcosystemModel,
+  detectProjectManifests
+} from '../server/graph/modules_catalog.js'
 import { readModelRegistry, registerModel, generateModelName, modelRegistryPath } from '../server/models_registry.js'
 import {
   latestRelease,
@@ -97,6 +108,11 @@ Commands:
                             "sources" model via the REST collector
   sources trace --target=<path>  File lineage over the sources graph
                             (--hops, --direction in|out|both)
+  modules build-graph <target>  Build & sync external module graph into global
+                            AnchorDB model (modules-<eco>) on-demand
+                            Target: <eco>::<module_name> (e.g. npm::express)
+  modules trace <target> [sym]  Trace calls/definitions for an external module/symbol
+  modules list [ecosystem]  List locally indexed modules from ~/.knlview/modules
   setup                   Bootstrap project in one command (scaffold base, skill, and models)
 
 Options:
@@ -112,6 +128,7 @@ Options:
                           (default: both; see README "Two-way lineage")
   --target <id>           Target node id for the subgraph query
   --hops <number>         Graph trace hop radius (default: 2)
+  --force                 Rebuild external module graph even if already indexed
   --init                  Scaffold a new base via the wizard (does not start the server)
   --structure <layout>    Layout for non-interactive --init:
                           standard | empty | custom (default: standard)
@@ -146,6 +163,7 @@ try {
       target: { type: 'string' },
       direction: { type: 'string' },
       hops: { type: 'string', default: '2' },
+      force: { type: 'boolean', default: false },
       init: { type: 'boolean', default: false },
       structure: { type: 'string', default: 'standard' },
       folders: { type: 'string', default: '' },
@@ -241,6 +259,18 @@ if (sourcesSub) {
     await runSourcesCommand(sourcesSub, values, { settings })
   } catch (err) {
     fail(`Sources command failed: ${err.message}`)
+  }
+  process.exit(0)
+}
+
+// The "modules" command: on-demand external boundary graph in global AnchorDB
+// modules models (modules-npm, modules-go, modules-cargo, modules-pypi).
+const modulesSub = positionals?.[0] === 'modules' ? positionals?.[1] : null
+if (modulesSub) {
+  try {
+    await runModulesCommand(modulesSub, positionals?.slice(2), { values, settings })
+  } catch (err) {
+    fail(`Modules command failed: ${err.message}`)
   }
   process.exit(0)
 }
@@ -1245,6 +1275,132 @@ async function runSourcesCollector(base, model, { quiet }) {
       '  Run "knl-view sources collect" once the REST endpoint is reachable.\n')
     return 0
   }
+}
+
+// The "modules" subcommands: on-demand external boundary graph in global
+// AnchorDB modules models (modules-npm, modules-go, modules-cargo, modules-pypi).
+async function runModulesCommand(sub, args, { values, settings }) {
+  if (sub === 'list') {
+    const ecoFilter = args?.[0]?.toLowerCase()
+    const ecosystems = ecoFilter ? [ecoFilter] : ['npm', 'go', 'cargo', 'pypi']
+    const all = {}
+    for (const eco of ecosystems) {
+      all[eco] = await readModulesCatalog(eco)
+    }
+    process.stdout.write(JSON.stringify(all, null, 2) + '\n')
+    return
+  }
+
+  if (sub === 'build-graph' || sub === 'build') {
+    const target = args?.[0] || values.target
+    if (!target) {
+      fail('Target is required:\n  knl-view modules build-graph <ecosystem>::<module_name> [--force]')
+    }
+    const parsed = parseModuleSpecifier(target)
+    if (!parsed) {
+      fail(`Invalid module target "${target}".\nExpected format: <ecosystem>::<module_name> (e.g. npm::express, go::github.com/gin-gonic/gin)`)
+    }
+    const { ecosystem, moduleName } = parsed
+
+    if (!settings.anchordb) {
+      fail('External modules graphs live in AnchorDB, which is not configured.\n' +
+        'Run "knl-view install anchordb" first (optional layer).')
+    }
+
+    const model = defaultEcosystemModel(ecosystem)
+    const base = anchordbClientOptions(settings.anchordb)
+
+    if (!values.force) {
+      const catalog = await readModulesCatalog(ecosystem)
+      const manifestVersions = await detectProjectManifests(process.cwd())
+      const expectedVersion = manifestVersions[ecosystem]?.[moduleName]
+      if (expectedVersion) {
+        const key = `${moduleName}@${expectedVersion}`
+        if (catalog[key]?.syncedAt) {
+          process.stdout.write(`module ${ecosystem}::${key} is already synced in model ${model} (${catalog[key].symbols.length} symbols). Use --force to rebuild.\n`)
+          return
+        }
+      }
+    }
+
+    process.stdout.write(`building graph for ${ecosystem}::${moduleName} ...\n`)
+    const moduleGraph = await buildModuleGraph(ecosystem, moduleName, { projectRoot: process.cwd() })
+
+    const client = await createAnchorWireClient({ ...base, model })
+    try {
+      const result = await syncModuleToAnchorDB(client, moduleGraph)
+      process.stdout.write(`module synced: ${ecosystem}::${moduleGraph.name}@${moduleGraph.version} -> model "${model}" (${result.symbols} symbols, ${result.edges} edges, +${result.linked} linked)\n`)
+    } finally {
+      client.close()
+    }
+    return
+  }
+
+  if (sub === 'trace') {
+    const rawTarget = args?.[0] || values.target
+    if (!rawTarget) {
+      fail('Target is required:\n  knl-view modules trace <ecosystem>::<module_name> [symbol] [--hops=2] [--direction=in|out|both]')
+    }
+
+    let ecosystem, symbolId
+    if (rawTarget.startsWith('ext:')) {
+      const m = rawTarget.match(/^ext:([a-z]+)\//)
+      if (!m) fail(`Cannot determine ecosystem from node ID "${rawTarget}".`)
+      ecosystem = m[1]
+      symbolId = rawTarget
+    } else {
+      const parsed = parseModuleSpecifier(rawTarget)
+      if (!parsed) {
+        fail(`Invalid module target "${rawTarget}".\nExpected format: <ecosystem>::<module_name> [symbol]`)
+      }
+      ecosystem = parsed.ecosystem
+      const catalog = await readModulesCatalog(ecosystem)
+      const subSymbol = args?.[1]
+      const entryKey = Object.keys(catalog).find((k) => k.startsWith(parsed.moduleName + '@') || k === parsed.moduleName)
+      if (!entryKey) {
+        fail(`Module "${rawTarget}" is not indexed in catalog ~/.knlview/modules/${ecosystem}.json.\nRun "knl-view modules build-graph ${rawTarget}" first.`)
+      }
+      const entry = catalog[entryKey]
+      symbolId = subSymbol ? `${entry.nodeId}#${subSymbol}` : entry.nodeId
+    }
+
+    if (!settings.anchordb) {
+      fail('The modules graph lives in AnchorDB, which is not configured.\n' +
+        'Run "knl-view install anchordb" first.')
+    }
+
+    const model = defaultEcosystemModel(ecosystem)
+    const base = anchordbClientOptions(settings.anchordb)
+    const client = await createAnchorWireClient({ ...base, model })
+    try {
+      let direction = 'both'
+      if (values.direction !== undefined) {
+        if (!['in', 'out', 'both'].includes(values.direction)) {
+          fail(`--direction must be in, out, or both, got "${values.direction}".`)
+        }
+        direction = values.direction
+      }
+      const hops = Number.parseInt(values.hops || '2', 10)
+      const maxHops = Number.isInteger(hops) && hops > 0 ? hops : 2
+      const results = await traceModuleSymbol(client, symbolId, { direction, maxHops })
+      process.stdout.write(JSON.stringify({
+        center: symbolId,
+        model,
+        direction,
+        maxHops,
+        trace: results
+      }, null, 2) + '\n')
+    } finally {
+      client.close()
+    }
+    return
+  }
+
+  fail('Unknown modules subcommand.\n' +
+    'Usage:\n' +
+    '  knl-view modules build-graph <ecosystem>::<module_name> [--force]\n' +
+    '  knl-view modules trace <ecosystem>::<module_name> [symbol] [--hops=2] [--direction=in|out|both]\n' +
+    '  knl-view modules list [ecosystem]')
 }
 
 function fail(message) {

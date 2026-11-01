@@ -443,6 +443,22 @@ record with a normal save and relinks its edges. Sync reports
 never silent. The read-only HTTP endpoint answers the same queries:
 `GET /api/sources/trace?target=<id>&direction=in|out|both&hops=N`.
 
+### External Modules Graph (On-Demand Module Boundary)
+
+AI agents can parse, index, and trace third-party dependencies on-demand into dedicated global AnchorDB models (`modules-npm`, `modules-go`, `modules-cargo`, `modules-pypi`) without polluting the local project graph or re-syncing across projects:
+
+```sh
+# Build & sync external module graph on-demand
+knl-view modules build-graph npm::express
+knl-view modules build-graph go::github.com/gin-gonic/gin
+
+# Trace definitions and call hierarchy within the module
+knl-view modules trace npm::express Router --hops=1
+
+# List locally indexed modules in ~/.knlview/modules
+knl-view modules list
+```
+
 ### CLI Query
 
 ```sh

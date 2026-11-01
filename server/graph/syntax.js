@@ -78,12 +78,14 @@ function firstDescendant(node, type) {
 function specsFromTree(grammar, tree) {
   const specs = []
   const names = []
+  const bindings = []
   const visit = (node) => {
     if (grammar === 'javascript' || grammar === 'typescript' || grammar === 'tsx') {
       if (node.type === 'import_statement' || node.type === 'export_statement') {
         const source = node.childForFieldName('source')
         const fragment = source && firstDescendant(source, 'string_fragment')
-        if (fragment) specs.push(fragment.text)
+        const specText = fragment ? fragment.text : null
+        if (specText) specs.push(specText)
         // Local binding names a qualified call may be addressed through:
         // the default import, the namespace alias, and each named import.
         for (let i = 0; i < node.childCount; i++) {
@@ -91,17 +93,25 @@ function specsFromTree(grammar, tree) {
           if (clause.type !== 'import_clause') continue
           for (let j = 0; j < clause.childCount; j++) {
             const part = clause.child(j)
-            if (part.type === 'identifier') names.push(part.text)
-            else if (part.type === 'namespace_import') {
+            if (part.type === 'identifier') {
+              names.push(part.text)
+              if (specText) bindings.push({ name: part.text, spec: specText })
+            } else if (part.type === 'namespace_import') {
               for (let k = 0; k < part.childCount; k++) {
-                if (part.child(k).type === 'identifier') names.push(part.child(k).text)
+                if (part.child(k).type === 'identifier') {
+                  names.push(part.child(k).text)
+                  if (specText) bindings.push({ name: part.child(k).text, spec: specText })
+                }
               }
             } else if (part.type === 'named_imports') {
               for (let k = 0; k < part.childCount; k++) {
                 const specifier = part.child(k)
                 if (specifier.type !== 'import_specifier') continue
                 const alias = specifier.childForFieldName('alias') || specifier.childForFieldName('name')
-                if (alias) names.push(alias.text)
+                if (alias) {
+                  names.push(alias.text)
+                  if (specText) bindings.push({ name: alias.text, spec: specText })
+                }
               }
             }
           }
@@ -111,7 +121,8 @@ function specsFromTree(grammar, tree) {
         if (fn && (fn.text === 'require' || fn.text === 'import')) {
           const args = node.childForFieldName('arguments')
           const fragment = args && firstDescendant(args, 'string_fragment')
-          if (fragment) specs.push(fragment.text)
+          const specText = fragment ? fragment.text : null
+          if (specText) specs.push(specText)
           // `const x = require('y')` / `const x = await import('y')`: the
           // declarator name is the binding: the visit starts above it, so
           // walk down from any enclosing declarator via field lookup here.
@@ -119,7 +130,10 @@ function specsFromTree(grammar, tree) {
           while (parent && parent.type === 'await_expression') parent = parent.parent
           if (parent && parent.type === 'variable_declarator') {
             const name = parent.childForFieldName('name')
-            if (name) names.push(name.text)
+            if (name) {
+              names.push(name.text)
+              if (specText) bindings.push({ name: name.text, spec: specText })
+            }
           }
         }
       }
@@ -133,8 +147,9 @@ function specsFromTree(grammar, tree) {
           // The name a qualified call uses: the declared alias, or the last
           // path segment (Go's convention when no alias is given).
           const alias = node.childForFieldName('name')
-          if (alias) names.push(alias.text)
-          else names.push(path.slice(path.lastIndexOf('/') + 1))
+          const name = alias ? alias.text : path.slice(path.lastIndexOf('/') + 1)
+          names.push(name)
+          bindings.push({ name, spec: path })
         }
       }
     } else if (grammar === 'python') {
@@ -144,12 +159,18 @@ function specsFromTree(grammar, tree) {
           if (c.type === 'dotted_name') {
             specs.push(c.text)
             const firstId = c.child(0)
-            if (firstId) names.push(firstId.text)
+            if (firstId) {
+              names.push(firstId.text)
+              bindings.push({ name: firstId.text, spec: c.text })
+            }
           } else if (c.type === 'aliased_import') {
             const name = c.childForFieldName('name')
             const alias = c.childForFieldName('alias')
             if (name) specs.push(name.text)
-            if (alias) names.push(alias.text)
+            if (alias) {
+              names.push(alias.text)
+              bindings.push({ name: alias.text, spec: name ? name.text : alias.text })
+            }
           }
         }
       } else if (node.type === 'import_from_statement') {
@@ -167,10 +188,14 @@ function specsFromTree(grammar, tree) {
           if (c.type === 'dotted_name') {
             names.push(c.text)
             if (modText) specs.push(modText + '.' + c.text)
+            bindings.push({ name: c.text, spec: modText || c.text })
           } else if (c.type === 'aliased_import') {
             const name = c.childForFieldName('name')
             const alias = c.childForFieldName('alias')
-            if (alias) names.push(alias.text)
+            if (alias) {
+              names.push(alias.text)
+              bindings.push({ name: alias.text, spec: modText || (name ? name.text : alias.text) })
+            }
             if (name && modText) specs.push(modText + '.' + name.text)
           }
         }
@@ -182,6 +207,7 @@ function specsFromTree(grammar, tree) {
           if (name) {
             specs.push('./' + name.text)
             names.push(name.text)
+            bindings.push({ name: name.text, spec: './' + name.text })
           }
         }
       } else if (node.type === 'use_declaration') {
@@ -204,16 +230,27 @@ function specsFromTree(grammar, tree) {
             const aliasNode = n.childForFieldName('alias')
             const full = (prefix ? prefix + '::' : '') + (pathNode ? pathNode.text : '')
             specs.push(full)
-            if (aliasNode) names.push(aliasNode.text)
+            const alias = aliasNode ? aliasNode.text : null
+            if (alias) {
+              names.push(alias)
+              const crateName = full.split('::')[0]
+              bindings.push({ name: alias, spec: crateName, full })
+            }
           } else if (n.type === 'scoped_identifier') {
             const full = (prefix ? prefix + '::' : '') + n.text
             specs.push(full)
             const name = n.childForFieldName('name')
-            if (name) names.push(name.text)
+            if (name) {
+              names.push(name.text)
+              const crateName = full.split('::')[0]
+              bindings.push({ name: name.text, spec: crateName, full })
+            }
           } else if (n.type === 'identifier') {
             const full = (prefix ? prefix + '::' : '') + n.text
             specs.push(full)
             names.push(n.text)
+            const crateName = full.split('::')[0]
+            bindings.push({ name: n.text, spec: crateName, full })
           }
         }
         extractRustUse(node.childForFieldName('argument'))
@@ -222,7 +259,7 @@ function specsFromTree(grammar, tree) {
     for (let i = 0; i < node.childCount; i++) visit(node.child(i))
   }
   visit(tree.rootNode)
-  return { specs, names }
+  return { specs, names, bindings }
 }
 
 /**
@@ -262,9 +299,9 @@ export async function extractCode(ext, content) {
   const parser = parserFor(grammar, lang)
   const tree = parser.parse(content)
   try {
-    const { specs: imports, names: importNames } = specsFromTree(grammar, tree)
+    const { specs: imports, names: importNames, bindings: importBindings } = specsFromTree(grammar, tree)
     const { symbols, calls } = structureFromTree(grammar, tree)
-    return { imports, importNames, symbols, calls }
+    return { imports, importNames, importBindings, symbols, calls }
   } finally {
     tree.delete()
   }
