@@ -10,9 +10,9 @@ import Contents from './views/Contents.jsx'
 import { ErrorState, Loading } from './components/States.jsx'
 import { onLangChange, getLang, t } from './i18n.js'
 
-// Berkas README adalah index foldernya. Membukanya langsung harus tampil
-// sama persis seperti membuka folder itu: rute tetap milik berkas (tanpa
-// pengalihan), hanya penyajiannya yang memakai tampilan folder.
+// A README file serves as the folder index. Opening it directly displays
+// identically to opening that folder: the route remains the file route
+// (no redirect), but the presentation uses the folder view.
 function readmeParent(path) {
   if (!/(^|\/)readme(\.(md|markdown|prd))?$/i.test(path)) return null
   return path.split('/').slice(0, -1).join('/')

@@ -73,9 +73,39 @@ GitHub commit without cloning, run
 `--install-links`, npm 11 links against a temporary clone it deletes
 afterwards, which leaves a broken install.
 
+## How to Set Up
+
+Setting up a project takes a single command:
+
+```sh
+knl-view setup
+```
+
+Or run directly without installing:
+
+```sh
+npx @rahmantech/knl-view setup
+```
+
+### What `knl-view setup` Does Automatically
+1. **Scaffolds `.knowledges/`**: Creates the documentation directory with a starter `README.md` index and template folders (or custom folders via `--folders`).
+2. **Installs Agent Skills**: Automatically places the `knl-view` skill into `.agents/skills/knl-view/` so coding agents (Antigravity, Claude, Codex, OpenCode) can read and manage your knowledge base.
+3. **Integrates Decision History**: Audits and offers to install the `decision-history` skill ([decisionskills](https://github.com/rachmanzz/decisionskills)) for append-only architecture decision tracking.
+4. **Protects Configuration**: Ensures `.gitignore` includes `knl-config.json` and temporary artifacts.
+5. **Auto-maps AnchorDB Models**: Configures `knowledges` and `sources` model identifiers in `knl-config.json` and records them in the machine-wide registry.
+6. **Provisions AnchorDB**: Prompts to start or provision an AnchorDB instance (native binary on Linux, Podman/Docker container on Windows & macOS).
+7. **Seeds Agent Rules**: Configures standardized KNL-View instructions in `AGENTS.md`, `GEMINI.md`, and `CLAUDE.md`.
+
+After setup, start the viewer immediately:
+
+```sh
+knl-view
+```
+
 ## Usage
 
 ```sh
+knl-view setup                             # bootstrap project (scaffold base, skill, gitignore, models)
 knl-view                                   # serve ./.knowledges on 127.0.0.1:8085
 knl-view --path=../other-project/.knowledges
 knl-view --port 8086 --host 0.0.0.0        # expose on the network
@@ -93,6 +123,8 @@ knl-view --seed-skill=knl-view --dir=global --yes
 | `--anchordb` | none | AnchorWire URL (`wire://host:port?token=...`) for this session; overrides the global config block |
 | `--target` | none | Target node ID for CLI subgraph trace (`knl-view graph trace`) |
 | `--hops` | `2` | Traversal depth radius for subgraph extraction |
+| `--method` | auto | Install method for `install anchordb`: `binary` or `container` |
+| `--runtime` | auto | Container runtime for `install anchordb`: `docker` or `podman` |
 | `--init` | off | Scaffold a new base interactively; does not start the server |
 | `--structure` | `standard` | Layout for a non-interactive `--init`: `standard`, `empty`, or `custom` |
 | `--folders` | none | Comma-separated folder names for `--structure=custom` |
@@ -118,15 +150,19 @@ off and the viewer runs fully local:
 ```json
 {
   "anchordb": {
-    "url": "wire://127.0.0.1:7448",
+    "url": "wire://127.0.0.1:17448",
     "token": "your-token",
-    "sync": true
+    "sync": true,
+    "deamon": "podman",
+    "container_name": "anchordb-knlview",
+    "container_id": "56519e7acbaa...",
+    "container_created_on": "2026-10-31 14:08:48..."
   }
 }
 ```
 
-**Per project: `knl-config.json` at the project root** (gitignored): only
-`path`, `port`, `host`, and a `models` map, never the anchordb connection:
+**Per project: `knl-config.json` at the project root** (gitignored):
+`path`, `port`, `host`, `models`, and optional `include` / `exclude` patterns:
 
 ```json
 {
@@ -134,9 +170,14 @@ off and the viewer runs fully local:
   "models": {
     "knowledges": "vez0vqrp",
     "consensus": "n0qrnmsz"
-  }
+  },
+  "include": ["dist/bundle.js"],
+  "exclude": ["legacy/**", "*.tmp"]
 }
 ```
+
+- `exclude`: Hard exclude that strictly filters files and folders from graph analysis and knowledge tree. Always takes precedence over defaults and includes.
+- `include`: Whitelists files and folders. Overrides default directory exclusions (e.g. including files from `dist/` or dot-folders).
 
 Model names are owned by the `models` map: role → name, and the name can
 be anything (random names are fine; the map records what each name is
@@ -150,29 +191,48 @@ The global registry `~/.knlview/models.json` records every name's owner
 project whose map has no entry for a role runs fully local: AnchorDB is
 touched only once the role is mapped.
 
-## Installing AnchorDB (optional)
+## Operating System Support & Installing AnchorDB
 
-AnchorDB is an optional layer. Without it the viewer runs fully local:
-everything (browsing, search, the graph engine, and `knl-view graph trace`)
-works with zero setup. Installing AnchorDB only adds persistent causal
-tracing across sessions and shared sync between machines.
+### Operating System Support
 
-`knl-view install anchordb` installs AnchorDB and writes the `anchordb`
-block into the global config:
+| OS | Core Viewer (`knl-view`) | Global Config Location | AnchorDB Backend |
+| --- | --- | --- | --- |
+| **Linux** | Native (Node.js >= 20.19) | `~/.knlview/knl-config.json` | **Native Binary** (`amd64`, `arm64`) or Container |
+| **macOS** | Native (Node.js >= 20.19) | `~/.knlview/knl-config.json` | **Container**: **Podman (Recommended)** or Docker |
+| **Windows** | Native (Node.js >= 20.19) | `%APPDATA%\knlview\knl-config.json` | **Container**: **Podman (Recommended)** or Docker |
 
-- **Linux and macOS**: downloads the native binary from
-  [GitHub Releases](https://github.com/rachmanzz/anchordb/releases),
-  verifies it against the release's `SHA256SUMS.txt`, installs to
-  `~/.knlview/bin/`, and starts `anchordb-server` detached (logs in
-  `~/.knlview/anchordb.log`, data in `~/.knlview/anchordb-data`).
-- **Other platforms**: a Linux container from
-  `ghcr.io/rachmanzz/anchordb` via docker or podman; the command refuses
-  to continue if neither is installed.
+---
 
-Non-interactive (CI/scripts): add `--yes`. Explicit method: `--method=binary`
-or `--method=container`. Fixed token instead of a random one: `--token=...`.
-If a container named `anchordb-knlview` already exists, the installer stops
-instead of removing it: data must not disappear by accident.
+### Installing AnchorDB (Optional)
+
+AnchorDB is an optional layer. Without it, the viewer runs 100% locally with zero external dependencies: document browsing, full-text search, the Markdown graph engine, and `knl-view graph trace` all work immediately. Installing AnchorDB adds persistent multi-hop causal tracing across sessions, whole-project source code dependency syncing, and shared multi-machine graphs.
+
+Run `knl-view install anchordb` to install AnchorDB and write the `anchordb` block into your global configuration:
+
+#### 1. Linux (Native Standalone Binary)
+- Native binaries are published on [GitHub Releases](https://github.com/rachmanzz/anchordb/releases) for Linux architectures:
+  - `linux_amd64` (x86_64)
+  - `linux_arm64` (aarch64)
+- On Linux, `knl-view install anchordb` automatically:
+  - Fetches the latest release asset and verifies it against the official `SHA256SUMS.txt`.
+  - Installs `anchordb-server` and `anchordb` into `~/.knlview/bin/` with secure file permissions (`0o700` / `0o755`).
+  - Starts `anchordb-server` detached as a background process daemon (logs in `~/.knlview/anchordb.log`, data in `~/.knlview/anchordb-data`).
+- You can also explicitly opt for containers on Linux using `--method=container`.
+
+#### 2. Windows & macOS (Container via Podman or Docker)
+- AnchorDB relies on Linux kernel primitives (`mmap` memory mapping and POSIX file locking). Native binaries are not yet published for Windows or macOS.
+- For Windows and macOS, AnchorDB is currently deployed via a lightweight container image (`ghcr.io/rachmanzz/anchordb`):
+  - **Podman (Recommended)**: Rootless, daemonless, lightweight, and requires no administrative privileges or background daemons.
+  - **Docker**: Supported via Docker Desktop or Docker Engine (`--runtime=docker`).
+- `knl-view install anchordb` automatically detects installed container runtimes. If both are found, it prompts you to select **Podman (Recommended)** or **Docker**. If neither is installed, it halts with clear installation guidance.
+
+#### Flags & Automation (CI / Scripts)
+- Non-interactive mode: add `--yes` (accepts all defaults).
+- Force install method: `--method=binary` or `--method=container`.
+- Specify container engine: `--runtime=podman` (recommended) or `--runtime=docker`.
+- Custom token: `--token=<text>` (default: cryptographic 32-byte hex token).
+- Port conflict handling: automatically detects if port 17448 is occupied and suggests alternative free ports.
+- Data safety: if a container named `anchordb-knlview` already exists, the installer stops rather than overwriting existing data.
 
 ## How a base is read
 
@@ -207,10 +267,10 @@ Every entry is decoration. Nothing in it can invent a file that is not on disk.
     "coding-rules.md": { "title": "Coding rules", "order": 1 }
   },
   "files": {
-    "rahasia.md": { "ignore": true }
+    "secret.md": { "ignore": true }
   },
   "dirs": {
-    "draft-lama": { "ignore": true }
+    "old-drafts": { "ignore": true }
   }
 }
 ```

@@ -32,9 +32,9 @@ export default function Sidebar({ route, open, onClose }) {
     })
   }, [query, tree])
 
-  // Dua pintu masuk tetap di atas pohon: `index` (README akar) dan
-  // `contents` (rute alias bikinan sistem). README akar tidak diulang lagi
-  // di dalam pohon supaya tidak tampil dua kali.
+  // Two permanent entry points above the tree: `index` (root README) and
+  // `contents` (system alias route). Root README is not repeated in the
+  // tree to avoid appearing twice.
   const rootReadme = tree ? findRootReadme(tree) : null
   const rootHref = rootReadme ? docHref(rootReadme.path) : '#/'
   const onIndex = route.view === 'home' || Boolean(rootReadme && route.view === 'doc' && route.path === rootReadme.path)

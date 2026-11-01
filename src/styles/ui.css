@@ -1,18 +1,18 @@
 /* ============================================================
-   ui.css: komponen
-   Tombol kotak siku (isi hitam / garis hitam dengan hover
-   terbalik), pohon navigasi, baris daftar isi bergaris rambut,
-   daftar isi dokumen, remah roti, pager, keadaan. Transisi
-   hanya untuk hover/fokus, maksimal 140ms (MOTION 1).
+   ui.css: components
+   Square buttons (solid black / outlined black with inverted hover),
+   navigation tree, hairline table of contents rows, document TOC,
+   breadcrumbs, pagers, states. Transitions are strictly for
+   hover/focus states, max 140ms (MOTION 1).
    ============================================================ */
 
-/* --- Utilitas --- */
+/* --- Utilities --- */
 
 .mono {
   font-family: var(--mono);
 }
 
-/* Label kapital: bagian kosakata Swiss, bukan hiasan. */
+/* Uppercase labels: Swiss design vocabulary, not decorative. */
 .pager-label,
 .toc-inline summary,
 .section-head,
@@ -22,7 +22,7 @@
   letter-spacing: var(--label-track);
 }
 
-/* --- Tombol --- */
+/* --- Buttons --- */
 
 .btn {
   display: inline-flex;
@@ -90,9 +90,9 @@
 }
 
 /* ============================================================
-   Pohon navigasi (sidebar)
-   Nama berkas dan nama folder sejajar pada satu kolom: keduanya
-   mulai setelah gang disclose selebar 2.75rem.
+   Navigation tree (sidebar)
+   File names and folder names align on a single column: both
+   start after a 2.75rem disclosure gutter.
    ============================================================ */
 
 .nav-list {
@@ -101,7 +101,7 @@
   padding: 0;
 }
 
-/* Dua pintu masuk tetap (index, contents) dipisah rambut dari pohon. */
+/* Two fixed entry points (index, contents) separated by hairline from tree. */
 .nav-alias {
   padding-bottom: var(--s-2);
   margin-bottom: var(--s-2);
@@ -352,7 +352,7 @@
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
-/* Anak folder: garis rambut di kiri, seperti catatan bersusun. */
+/* Folder children: left hairline rule, resembling stacked notes. */
 .index-children {
   margin-left: var(--s-2);
   padding-left: var(--s-4);
@@ -360,7 +360,7 @@
 }
 
 /* ============================================================
-   Label bagian & kepala seksi
+   Section labels & group headers
    ============================================================ */
 
 .section-head {
@@ -395,7 +395,7 @@
   margin-top: var(--s-6);
 }
 
-/* Jarak antar seksi daftar di halaman folder. */
+/* Spacing between list sections in folder view. */
 .folder .md + section,
 .folder section + section,
 .folder .state + section,
@@ -404,7 +404,7 @@
 }
 
 /* ============================================================
-   Remah roti
+   Breadcrumbs
    ============================================================ */
 
 .crumbs {
@@ -543,7 +543,7 @@
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
-/* Rel TOC hanya untuk layar sangat lebar. */
+/* TOC rail only active on extra-wide screens. */
 .toc-rail {
   display: none;
 }
@@ -789,8 +789,8 @@
 }
 
 /* ============================================================
-   Responsif: sidebar jadi laci di bawah 60rem
-   Tanpa animasi laci: tampil dan hilang langsung (MOTION 1).
+   Responsive: sidebar becomes a drawer below 60rem
+   No drawer slide animation: immediate appearance (MOTION 1).
    ============================================================ */
 
 .scrim {
@@ -853,7 +853,7 @@
   }
 }
 
-/* Dua kolom beranda menumpuk di bawah 56rem. */
+/* Home grid collapses to single column below 56rem. */
 @media (max-width: 56rem) {
   .home-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -861,7 +861,7 @@
   }
 }
 
-/* Layar ponsel: langkah baca sedikit lebih rapat. */
+/* Mobile viewports: tighter body text spacing. */
 @media (max-width: 40rem) {
   .md {
     font-size: 16px;

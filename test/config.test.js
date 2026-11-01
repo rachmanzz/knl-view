@@ -7,14 +7,15 @@ import {
   readProjectConfig,
   readGlobalConfig,
   globalConfigPath,
+  knlGlobalDir,
   syncStatePath,
   normalizeProjectConfig,
   normalizeModels,
   resolveModel,
-  normalizeGlobalConfig,
   normalizeAnchordb,
   projectSlug,
   resolveSettings,
+  createPathMatcher,
   anchordbClientOptions,
   DEFAULT_SETTINGS
 } from '../server/config.js'
@@ -65,6 +66,18 @@ describe('readProjectConfig', () => {
     const { config } = await readProjectConfig(dir)
     assert.deepEqual(config, {})
   })
+
+  test('normalizes include and exclude string arrays', async () => {
+    const dir = makeDir({
+      'knl-config.json': JSON.stringify({
+        include: ['src/**', 'lib/util.js', '   '],
+        exclude: 'dist'
+      })
+    })
+    const { config } = await readProjectConfig(dir)
+    assert.deepEqual(config.include, ['src/**', 'lib/util.js'])
+    assert.deepEqual(config.exclude, ['dist'])
+  })
 })
 
 describe('readGlobalConfig', () => {
@@ -95,6 +108,67 @@ describe('readGlobalConfig', () => {
     })
     const { config } = await readGlobalConfig(home)
     assert.deepEqual(config, { anchordb: { url: 'wire://h:1', sync: true } })
+  })
+})
+
+describe('knlGlobalDir and OS detection', () => {
+  test('resolves to %APPDATA%/knlview on Windows (win32)', () => {
+    const winDir = knlGlobalDir(null, {
+      platform: 'win32',
+      env: { APPDATA: 'C:\\Users\\Alice\\AppData\\Roaming' }
+    })
+    assert.equal(winDir, 'C:\\Users\\Alice\\AppData\\Roaming\\knlview')
+    assert.equal(
+      globalConfigPath(null, {
+        platform: 'win32',
+        env: { APPDATA: 'C:\\Users\\Alice\\AppData\\Roaming' }
+      }),
+      'C:\\Users\\Alice\\AppData\\Roaming\\knlview\\knl-config.json'
+    )
+  })
+
+  test('resolves to ~/.knlview on Linux', () => {
+    const linuxDir = knlGlobalDir(null, {
+      platform: 'linux',
+      env: { HOME: '/home/alice' }
+    })
+    assert.equal(linuxDir, '/home/alice/.knlview')
+    assert.equal(
+      globalConfigPath(null, {
+        platform: 'linux',
+        env: { HOME: '/home/alice' }
+      }),
+      '/home/alice/.knlview/knl-config.json'
+    )
+  })
+
+  test('resolves to ~/.knlview on macOS (darwin)', () => {
+    const macDir = knlGlobalDir(null, {
+      platform: 'darwin',
+      env: { HOME: '/Users/alice' }
+    })
+    assert.equal(macDir, '/Users/alice/.knlview')
+    assert.equal(
+      globalConfigPath(null, {
+        platform: 'darwin',
+        env: { HOME: '/Users/alice' }
+      }),
+      '/Users/alice/.knlview/knl-config.json'
+    )
+  })
+
+  test('respects explicit home directory override across platforms', () => {
+    const winOverride = knlGlobalDir('/custom/home', {
+      platform: 'win32',
+      env: { APPDATA: 'C:\\Users\\Alice\\AppData\\Roaming' }
+    })
+    assert.equal(winOverride, path.win32.join('/custom/home', '.knlview'))
+
+    const unixOverride = knlGlobalDir('/custom/home', {
+      platform: 'linux',
+      env: { HOME: '/home/alice' }
+    })
+    assert.equal(unixOverride, path.posix.join('/custom/home', '.knlview'))
   })
 })
 
@@ -144,6 +218,20 @@ describe('normalizeAnchordb', () => {
       sync: false,
       relations: ['supersedes', 'depends_on']
     })
+  })
+
+  test('keeps daemon and container metadata when present', () => {
+    const a = normalizeAnchordb({
+      url: 'wire://127.0.0.1:7448',
+      deamon: 'docker',
+      container_name: 'anchordb-knlview',
+      container_id: 'c-12345',
+      container_created_on: '2026-10-31T10:00:00Z'
+    })
+    assert.equal(a.deamon, 'docker')
+    assert.equal(a.container_name, 'anchordb-knlview')
+    assert.equal(a.container_id, 'c-12345')
+    assert.equal(a.container_created_on, '2026-10-31T10:00:00Z')
   })
 
   test('sync defaults to true', () => {
@@ -202,6 +290,8 @@ describe('resolveSettings', () => {
       host: DEFAULT_SETTINGS.host,
       models: null,
       labelDir: null,
+      include: null,
+      exclude: null,
       anchordb: null
     })
   })
@@ -223,6 +313,8 @@ describe('resolveSettings', () => {
       host: '0.0.0.0',
       models: null,
       labelDir: null,
+      include: null,
+      exclude: null,
       anchordb: null
     })
   })
@@ -271,6 +363,39 @@ describe('resolveSettings', () => {
       global: { anchordb: { url: 'wire://127.0.0.1:7448' } }
     })
     assert.equal(settings.anchordb, null)
+  })
+
+  test('resolveSettings includes project include and exclude', () => {
+    const settings = resolveSettings({
+      project: { include: ['src/**'], exclude: ['dist'] }
+    })
+    assert.deepEqual(settings.include, ['src/**'])
+    assert.deepEqual(settings.exclude, ['dist'])
+  })
+})
+
+describe('createPathMatcher', () => {
+  test('matches exact file and folder prefixes', () => {
+    const matcher = createPathMatcher(['vendor', 'src/legacy.js'])
+    assert.equal(matcher.matches('vendor'), true)
+    assert.equal(matcher.matches('vendor/lib.js'), true)
+    assert.equal(matcher.matches('src/legacy.js'), true)
+    assert.equal(matcher.matches('src/other.js'), false)
+  })
+
+  test('matches wildcards and globstars', () => {
+    const matcher = createPathMatcher(['*.test.js', 'dist/**'])
+    assert.equal(matcher.matches('app.test.js'), true)
+    assert.equal(matcher.matches('src/app.test.js'), true)
+    assert.equal(matcher.matches('dist/bundle.js'), true)
+    assert.equal(matcher.matches('dist/sub/chunk.js'), true)
+    assert.equal(matcher.matches('src/app.js'), false)
+  })
+
+  test('isPrefixOfAny checks if path is ancestor of an include pattern', () => {
+    const matcher = createPathMatcher(['node_modules/my-pkg/**'])
+    assert.equal(matcher.isPrefixOfAny('node_modules'), true)
+    assert.equal(matcher.isPrefixOfAny('src'), false)
   })
 })
 

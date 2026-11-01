@@ -1,11 +1,13 @@
 import { promises as fs } from 'node:fs'
 import fsSync from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 
 // Two-layer knl-view config:
-// - Global: ~/.knlview/knl-config.json holds the "anchordb" block (URL, token,
-//   sync). That connection belongs to the machine/user, not the repo, so all
-//   projects using AnchorDB share the same server.
+// - Global: %APPDATA%\knlview on Windows (fallback to ~/.knlview), or
+//   ~/.knlview/knl-config.json on Linux/macOS. Holds the "anchordb" block
+//   (URL, token, sync). That connection belongs to the machine/user, not
+//   the repo, so all projects using AnchorDB share the same server.
 // - Per project: knl-config.json at the project root (gitignored) holds
 //   path/port/host and the "models" map (role -> AnchorDB model name; names
 //   may be random, the map records what each name is for).
@@ -24,27 +26,77 @@ export const DEFAULT_MODEL = 'knowledges'
 // Causal relations /api/anchordb/trace follows when the config sets none.
 export const DEFAULT_RELATIONS = ['supersedes', 'affects_knowledge', 'depends_on']
 
-export function globalConfigPath(home = process.env.HOME) {
-  return path.join(home || '', GLOBAL_CONFIG_DIR, GLOBAL_CONFIG_FILE)
+/**
+ * Resolve the global knl-view base directory based on OS:
+ * - On Windows (win32): uses %APPDATA%\knlview (falling back to %USERPROFILE%\AppData\Roaming\knlview).
+ * - On macOS/Linux: uses ~/.knlview (falling back to os.homedir()/.knlview).
+ * - If an explicit `home` path is provided (e.g. in unit tests), it maps to path.join(home, '.knlview').
+ */
+export function knlGlobalDir(home = null, { env = process.env, platform = process.platform } = {}) {
+  const p = platform === 'win32' ? path.win32 : path
+  if (home && typeof home === 'string' && home.trim()) {
+    return p.join(home.trim(), GLOBAL_CONFIG_DIR)
+  }
+
+  // OS detection: Windows (win32) uses %APPDATA%\knlview
+  if (platform === 'win32') {
+    if (env.APPDATA && env.APPDATA.trim()) {
+      return p.join(env.APPDATA.trim(), 'knlview')
+    }
+    const winHome = env.USERPROFILE || (typeof os.homedir === 'function' ? os.homedir() : '') || '.'
+    return p.join(winHome, 'AppData', 'Roaming', 'knlview')
+  }
+
+  // macOS and Linux use ~/.knlview
+  const unixHome = env.HOME || (typeof os.homedir === 'function' ? os.homedir() : '') || '.'
+  return p.join(unixHome, GLOBAL_CONFIG_DIR)
+}
+
+export function globalConfigPath(home = null, options = {}) {
+  const platform = options.platform || process.platform
+  const p = platform === 'win32' ? path.win32 : path
+  return p.join(knlGlobalDir(home, options), GLOBAL_CONFIG_FILE)
 }
 
 /**
  * Location of the mirror of the last synced edges for one model:
- * ~/.knlview/sync-state/<model>.json. Incremental sync compares the local
- * graph against this mirror, not against the server contents (the server
- * offers no edge enumeration over the wire protocol).
+ * ~/.knlview/sync-state/<model>.json (or %APPDATA%\knlview\sync-state\ on Windows).
+ * Incremental sync compares the local graph against this mirror, not against
+ * the server contents (the server offers no edge enumeration over the wire protocol).
  */
-export function syncStatePath(model, home = process.env.HOME) {
+export function syncStatePath(model, home = null, options = {}) {
+  const platform = options.platform || process.platform
+  const p = platform === 'win32' ? path.win32 : path
   const safe = String(model || 'model').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'model'
-  return path.join(home || '', GLOBAL_CONFIG_DIR, 'sync-state', `${safe}.json`)
+  return p.join(knlGlobalDir(home, options), 'sync-state', `${safe}.json`)
 }
 
 /**
- * Read the global config ~/.knlview/knl-config.json (anchordb block).
+ * Read the global config knl-config.json (anchordb block).
+ * On Windows, falls back to legacy ~/.knlview/knl-config.json if %APPDATA% has no config yet.
  * @returns {Promise<{config: object|null, error: string|null}>}
  */
-export async function readGlobalConfig(home = process.env.HOME) {
-  return readConfigFile(globalConfigPath(home), normalizeGlobalConfig)
+export async function readGlobalConfig(home = null, options = {}) {
+  const primary = globalConfigPath(home, options)
+  const res = await readConfigFile(primary, normalizeGlobalConfig)
+  if (res.config) return res
+
+  // On Windows, if config is missing in %APPDATA%, check legacy ~/.knlview fallback
+  const platform = options.platform || process.platform
+  const p = platform === 'win32' ? path.win32 : path
+  const env = options.env || process.env
+  if (platform === 'win32' && !home) {
+    const winHome = env.USERPROFILE || env.HOME || (typeof os.homedir === 'function' ? os.homedir() : null)
+    if (winHome) {
+      const fallbackFile = p.join(winHome, GLOBAL_CONFIG_DIR, GLOBAL_CONFIG_FILE)
+      if (fallbackFile !== primary) {
+        const fallbackRes = await readConfigFile(fallbackFile, normalizeGlobalConfig)
+        if (fallbackRes.config) return fallbackRes
+      }
+    }
+  }
+
+  return res
 }
 
 /**
@@ -98,6 +150,10 @@ export function normalizeProjectConfig(raw) {
   if (model) config.model = model
   const labelDir = cleanString(raw.labelDir)
   if (labelDir) config.labelDir = labelDir
+  const include = cleanStringList(raw.include)
+  if (include) config.include = include
+  const exclude = cleanStringList(raw.exclude)
+  if (exclude) config.exclude = exclude
   return config
 }
 
@@ -160,6 +216,17 @@ export function normalizeAnchordb(raw) {
     const relations = raw.relations.map((r) => cleanString(r)).filter(Boolean)
     if (relations.length) anchordb.relations = relations
   }
+  const daemon = cleanString(raw.daemon || raw.deamon)
+  if (daemon) {
+    anchordb.daemon = daemon
+    anchordb.deamon = daemon
+  }
+  const containerName = cleanString(raw.container_name)
+  if (containerName) anchordb.container_name = containerName
+  const containerId = cleanString(raw.container_id)
+  if (containerId) anchordb.container_id = containerId
+  const containerCreatedOn = cleanString(raw.container_created_on)
+  if (containerCreatedOn) anchordb.container_created_on = containerCreatedOn
   return anchordb
 }
 
@@ -208,6 +275,8 @@ export function resolveSettings({ cli = {}, project = null, global: globalConfig
   }
 
   const labelDir = pickString(cli.labelDir, p.labelDir)
+  const include = Array.isArray(p.include) && p.include.length ? p.include : null
+  const exclude = Array.isArray(p.exclude) && p.exclude.length ? p.exclude : null
 
   return {
     path: pickString(cli.path, p.path) ?? DEFAULT_SETTINGS.path,
@@ -215,6 +284,8 @@ export function resolveSettings({ cli = {}, project = null, global: globalConfig
     host: pickString(cli.host, p.host) ?? DEFAULT_SETTINGS.host,
     models: hasModels ? models : null,
     labelDir: labelDir ?? null,
+    include,
+    exclude,
     anchordb
   }
 }
@@ -224,7 +295,7 @@ export function resolveSettings({ cli = {}, project = null, global: globalConfig
  * Config fields win over values in the URL query.
  */
 export function anchordbClientOptions(anchordb) {
-  if (!anchordb?.url) return null
+  if (!anchordb?.url || typeof anchordb.url !== 'string') return null
   const normalized = anchordb.url.replace(/^(wire|tcp):\/\//i, 'http://')
   let parsed
   try {
@@ -260,4 +331,59 @@ function cleanString(value) {
 function toPort(value) {
   const n = Number(value)
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null
+}
+
+function cleanStringList(raw) {
+  if (!raw) return null
+  const arr = Array.isArray(raw) ? raw : [raw]
+  const cleaned = arr
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean)
+  return cleaned.length ? cleaned : null
+}
+
+/**
+ * Compile a list of string patterns (globs, directory names, or exact paths)
+ * into a reusable matcher object with `matches(relPath, baseName)` and
+ * `isPrefixOfAny(relPath)`.
+ */
+export function createPathMatcher(patterns) {
+  if (!patterns) return null
+  const list = cleanStringList(patterns)
+  if (!list) return null
+
+  const matchers = list.map((pattern) => {
+    const clean = pattern.replace(/^\/+|\/+$/g, '')
+    const hasWildcard = clean.includes('*') || clean.includes('?')
+    if (!hasWildcard) {
+      return {
+        pattern: clean,
+        test: (rel, name) => rel === clean || rel.startsWith(clean + '/') || name === clean
+      }
+    }
+    const escaped = clean
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*\*/g, '§§GLOBSTAR§§')
+      .replace(/\*/g, '[^/]*')
+      .replace(/§§GLOBSTAR§§/g, '.*')
+      .replace(/\?/g, '[^/]')
+    try {
+      const re = new RegExp(`^(?:${escaped}|.*/${escaped})(?:/.*)?$`)
+      return {
+        pattern: clean,
+        test: (rel, name) => re.test(rel) || (name && re.test(name))
+      }
+    } catch {
+      return {
+        pattern: clean,
+        test: () => false
+      }
+    }
+  })
+
+  return {
+    patterns: list,
+    matches: (rel, name = '') => matchers.some((m) => m.test(rel, name)),
+    isPrefixOfAny: (rel) => matchers.some((m) => m.pattern.startsWith(rel + '/') || m.test(rel, rel))
+  }
 }

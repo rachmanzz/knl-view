@@ -1,35 +1,35 @@
 /* ============================================================
-   knl-view: Arsitektur Token
-   Swiss modern (International Typographic Style): putih bersih,
-   grid ketat, garis rambut hitam, sans Helvetica, satu aksen
-   merah untuk penanda keadaan ("anda di sini", fokus, galat).
-   Alasan pilihan huruf: Swiss = Helvetica; Arial/Liberation
-   adalah pasokan sistem di Linux, jadi tanpa unduhan.
-   Kunci token ini lebih dulu sebelum komponen apa pun dibuat.
+   knl-view: Token Architecture
+   Swiss modern (International Typographic Style): clean white,
+   tight grid, black hairlines, Helvetica sans, single red accent
+   for state indicators ("you are here", focus, errors).
+   Font choice: Swiss = Helvetica; Arial/Liberation are standard
+   system fallbacks on Linux, requiring zero font downloads.
+   Lock these tokens before creating any component.
    ============================================================ */
 
 :root {
-  /* --- Warna: 2 inti (putih, hitam) + netral abu + 1 aksen --- */
-  --paper: #ffffff; /* kertas utama: latar konten */
-  --paper-2: #f3f3f1; /* panel sekunder: sidebar, kartu */
-  --paper-3: #e9e9e6; /* panel tersier: band kode */
-  --paper-hover: #ededea; /* hover baris daftar */
-  --ink: #111111; /* tinta utama: teks, judul, garis berat */
-  --ink-2: #454545; /* tinta lemah: teks sekunder */
-  --ink-muted: #636363; /* metadata (lolos 4.5:1 di semua kertas) */
-  --rule: #dcdcd8; /* garis rambut: pemisah baris */
-  --rule-strong: #858580; /* garis tegas: batas kontrol (lolos 3:1) */
-  --accent: #e30613; /* merah Swiss: penanda aktif, fokus, galat */
-  --accent-strong: #a5090f; /* merah pekat: teks hover/aktif (7:1) */
-  --focus: #e30613; /* cincin fokus, tebal 2px */
+  /* --- Colors: 2 core (white, black) + neutral grays + 1 accent --- */
+  --paper: #ffffff; /* primary paper: content background */
+  --paper-2: #f3f3f1; /* secondary panel: sidebar, cards */
+  --paper-3: #e9e9e6; /* tertiary panel: code bands */
+  --paper-hover: #ededea; /* list row hover */
+  --ink: #111111; /* primary ink: body text, headings, heavy rules */
+  --ink-2: #454545; /* secondary ink: subordinate text */
+  --ink-muted: #636363; /* metadata (passes 4.5:1 across papers) */
+  --rule: #dcdcd8; /* hairline rule: row separator */
+  --rule-strong: #858580; /* strong rule: control boundaries (passes 3:1) */
+  --accent: #e30613; /* Swiss red: active indicators, focus, errors */
+  --accent-strong: #a5090f; /* deep red: hover/active text (7:1) */
+  --focus: #e30613; /* focus ring, 2px solid */
 
-  /* --- Tipografi --- */
+  /* --- Typography --- */
   --sans: "Helvetica Neue", Helvetica, Arial, "Segoe UI", Roboto,
     "Liberation Sans", sans-serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo,
     Consolas, "Liberation Mono", monospace;
 
-  /* Skala ruang: hanya nilai ini yang dipakai jarak di seluruh aplikasi. */
+  /* Spacing scale: strict system values across the whole app. */
   --s-1: 0.25rem;
   --s-2: 0.5rem;
   --s-3: 0.75rem;
@@ -38,14 +38,14 @@
   --s-6: 2rem;
   --s-7: 3rem;
 
-  --radius: 0; /* sudut siku: Swiss tanpa pembulatan */
+  --radius: 0; /* sharp corners: Swiss typography avoids rounding */
 
   --sidebar-w: 17.5rem;
   --topbar-h: 3.25rem;
-  --measure: 44rem; /* lebar baca maksimum */
+  --measure: 44rem; /* maximum reading line length */
 
-  /* Label kecil huruf besar: kapital + tracking moderat (0.1em),
-     bagian kosakata Swiss, bukan hiasan. */
+  /* Small uppercase labels: caps + moderate tracking (0.1em),
+     part of Swiss vocabulary, not decorative. */
   --label-size: 10.5px;
   --label-track: 0.1em;
 }

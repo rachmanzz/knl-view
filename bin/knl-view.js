@@ -1,17 +1,15 @@
 #!/usr/bin/env node
-import { parseArgs } from 'node:util'
+import { parseArgs, promisify } from 'node:util'
 import path from 'node:path'
 import fs from 'node:fs'
 import readline from 'node:readline/promises'
 import { execFile, spawn } from 'node:child_process'
-import { promisify } from 'node:util'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { createKnowledgeServer, attachAnchorDB } from '../server/index.js'
-import { scaffoldBase, seedSkill, ensureGitignore } from '../server/scaffold.js'
+import { scaffoldBase, seedSkill, ensureGitignore, seedAgentInstructions } from '../server/scaffold.js'
 import { buildGraphFromRoot } from '../server/graph/parser.js'
 import {
-  claimId,
   deriveStatus,
   recordClaim,
   readClaimsIndex,
@@ -21,7 +19,7 @@ import {
   outboundConsensus,
   CONSENSUS_RELATIONS
 } from '../server/consensus.js'
-import { readProjectConfig, readGlobalConfig, projectSlug, anchordbClientOptions, resolveModel, resolveSettings, DEFAULT_MODEL } from '../server/config.js'
+import { readProjectConfig, readGlobalConfig, projectSlug, anchordbClientOptions, resolveModel, resolveSettings, knlGlobalDir, globalConfigPath } from '../server/config.js'
 import { createAnchorWireClient, mirrorStillValid } from '../server/graph/anchordb_client.js'
 import { syncSourcesToAnchorDB, traceSources, purgeArchivedRecords } from '../server/graph/sources.js'
 import { readModelRegistry, registerModel, generateModelName, modelRegistryPath } from '../server/models_registry.js'
@@ -32,7 +30,15 @@ import {
   downloadFile,
   verifySha256,
   mergeGlobalAnchordb,
-  detectContainerRuntime,
+  availableContainerRuntimes,
+  detectRunningDaemon,
+  inspectContainerStatus,
+  startContainer,
+  removeContainer,
+  detectGraphify,
+  checkDecisionSkillsStatus,
+  installDecisionSkills,
+  resolveAnchorPorts,
   GHCR_IMAGE,
   HTTP_PORT_DEFAULT,
   WIRE_PORT_DEFAULT,
@@ -91,6 +97,7 @@ Commands:
                             "sources" model via the REST collector
   sources trace --target=<path>  File lineage over the sources graph
                             (--hops, --direction in|out|both)
+  setup                   Bootstrap project in one command (scaffold base, skill, and models)
 
 Options:
   --port, -p <number>     HTTP port (default: 8085, or knl-config.json)
@@ -99,6 +106,7 @@ Options:
   --anchordb <url>        AnchorWire URL for this session, overrides the
                           "anchordb" block in knl-config.json
   --method <method>       Method for "install anchordb": binary | container
+  --runtime <engine>      Container runtime for "install anchordb": docker | podman
   --token <text>          Auth token for "install anchordb" (default: random)
   --direction <dir>       Lineage direction for "graph trace": in | out | both
                           (default: both; see README "Two-way lineage")
@@ -133,6 +141,7 @@ try {
       host: { type: 'string' },
       anchordb: { type: 'string' },
       method: { type: 'string' },
+      runtime: { type: 'string' },
       token: { type: 'string' },
       target: { type: 'string' },
       direction: { type: 'string' },
@@ -189,6 +198,12 @@ const settings = resolveSettings({
 })
 if (values.anchordb !== undefined && !settings.anchordb) {
   fail('--anchordb must be a wire:// or tcp:// URL, example: --anchordb=wire://127.0.0.1:7448?token=xxx')
+}
+
+// The "setup" command: one-shot bootstrap for the project
+if (positionals?.[0] === 'setup') {
+  await runSetupCommand({ values, settings, projectConfig, globalConfig })
+  process.exit(0)
 }
 
 // The "model" command: manage the role → AnchorDB model name map. No other
@@ -280,6 +295,10 @@ if (values.init || values['seed-skill'] !== undefined) {
   process.exit(0)
 }
 
+if (positionals && positionals.length > 0) {
+  fail(`Unknown command "${positionals[0]}".\n\nRun "knl-view --help" for available commands.`)
+}
+
 const port = Number(settings.port)
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   fail(`--port must be a number 1-65535, got "${settings.port}".`)
@@ -305,7 +324,9 @@ const server = createKnowledgeServer({
   port,
   anchordb: settings.anchordb,
   consensusModel: resolveModel(settings.models, 'consensus'),
-  sourcesModel: resolveModel(settings.models, 'sources')
+  sourcesModel: resolveModel(settings.models, 'sources'),
+  include: settings.include,
+  exclude: settings.exclude
 })
 
 server.on('error', (err) => {
@@ -359,6 +380,8 @@ server.listen(port, settings.host, () => {
         } else {
           process.stdout.write(`  anchordb failed: ${result.reason} (viewer runs local only)\n`)
         }
+      }).catch((err) => {
+        process.stdout.write(`  anchordb error: ${err.message} (viewer runs local only)\n`)
       })
     }
   }
@@ -428,6 +451,271 @@ async function runSetup() {
   }
 }
 
+async function runSetupCommand({ values, settings, projectConfig, globalConfig }) {
+  const root = path.resolve(process.cwd(), values.path || settings.path || '.knowledges')
+  const interactive = Boolean(process.stdin.isTTY) && !values.yes
+  const rl = interactive ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null
+
+  try {
+    process.stdout.write('knl-view setup: bootstrapping project ...\n')
+
+    // Scaffold base
+    const actions = await scaffoldBase({
+      root,
+      structure: values.structure || 'standard',
+      folders: values.folders ? values.folders.split(',').map((s) => s.trim()).filter(Boolean) : []
+    })
+    const createdCount = actions.filter((a) => a.status === 'created').length
+    const relRoot = path.relative(process.cwd(), root) || root
+    process.stdout.write(`  [1/5] knowledge base: ${relRoot} (${createdCount > 0 ? 'created' : 'already present'})\n`)
+
+    // Audit and seed skill
+    const skillPath = path.join(process.cwd(), '.agents', 'skills', 'knl-view', 'SKILL.md')
+    let skillPresent = false
+    try {
+      await fs.promises.stat(skillPath)
+      skillPresent = true
+    } catch {}
+
+    if (skillPresent) {
+      process.stdout.write(`  [2/5] agent skill:    ${skillPath} (already present)\n`)
+    } else {
+      let wantSkill = true
+      if (interactive) {
+        wantSkill = await askYesNo(rl, 'Install knl-view agent skill to .agents/skills/knl-view?', true)
+      }
+      if (wantSkill) {
+        const skillResult = await seedSkill({ scope: values.dir || 'project', cwd: process.cwd() })
+        process.stdout.write(`  [2/5] agent skill:    ${skillResult.path} (${skillResult.status})\n`)
+      } else {
+        process.stdout.write(`  [2/5] agent skill:    skipped by user\n`)
+      }
+    }
+
+    // Audit and seed decision-history skill
+    const home = process.env.HOME || process.cwd()
+    const decisionStatus = await checkDecisionSkillsStatus({ cwd: process.cwd(), home })
+    const statusLabel =
+      decisionStatus.status === 'not_installed'
+        ? 'not installed'
+        : decisionStatus.status === 'needs_update'
+        ? `update available (current: ${decisionStatus.currentVersion || 'unknown'}, latest: ${decisionStatus.latestVersion})`
+        : 'already installed'
+
+    process.stdout.write(`  [skill] decision-history: ${statusLabel}\n`)
+
+    if (decisionStatus.status === 'not_installed' || decisionStatus.status === 'needs_update') {
+      let wantDecisionSkill = true
+      if (interactive) {
+        wantDecisionSkill = await askYesNo(
+          rl,
+          'Would you like to install/update the decision-history skill (rachmanzz/decisionskills)?',
+          true
+        )
+      }
+      if (wantDecisionSkill) {
+        let scope = 'project'
+        if (interactive) {
+          scope = await askChoice(
+            rl,
+            'Scope for decision-history skill?',
+            [
+              ['project', 'per-project (.agents/skills/decision-history)'],
+              ['global', 'global (all agent terminals: agy, codex, opencode, claude)']
+            ],
+            'project'
+          )
+        }
+        process.stdout.write(`Installing decision-history skill (${scope}) ...\n`)
+        await installDecisionSkills({ scope, cwd: process.cwd(), home, exec })
+        process.stdout.write(`  [skill] decision-history: installed (${scope})\n`)
+      } else {
+        process.stdout.write(`  [skill] decision-history: skipped by user\n`)
+      }
+    }
+
+    // Ensure gitignore
+    const giResult = await ensureGitignore({ cwd: process.cwd() })
+    process.stdout.write(`  [3/5] gitignore:      ${giResult.path} (${giResult.status})\n`)
+
+    // Daemon and container lifecycle
+    let currentGlobalConfig = globalConfig
+    let containerStatus = await inspectContainerStatus(exec)
+    let daemonMeta = await detectRunningDaemon(exec)
+
+    if (containerStatus.exists && !containerStatus.valid) {
+      let wantRecreate = true
+      if (interactive) {
+        wantRecreate = await askYesNo(
+          rl,
+          `AnchorDB container "${containerStatus.name}" is in an invalid state (${containerStatus.status}). Would you like to recreate it?`,
+          true
+        )
+      }
+      if (wantRecreate) {
+        process.stdout.write(`Removing invalid container "${containerStatus.name}" ...\n`)
+        try {
+          await removeContainer(exec, containerStatus.runtime, containerStatus.name)
+        } catch {}
+        await runInstallCommand('anchordb', {
+          values: { ...values, method: 'container' },
+          rl
+        })
+        const freshGlobal = await readGlobalConfig()
+        currentGlobalConfig = freshGlobal.config || currentGlobalConfig
+        daemonMeta = await detectRunningDaemon(exec)
+      }
+    } else if (containerStatus.exists && !containerStatus.running && containerStatus.valid) {
+      let wantStart = true
+      if (interactive) {
+        wantStart = await askYesNo(
+          rl,
+          `AnchorDB container "${containerStatus.name}" is stopped. Would you like to start it now?`,
+          true
+        )
+      }
+      if (wantStart) {
+        process.stdout.write(`Starting container "${containerStatus.name}" ...\n`)
+        await startContainer(exec, containerStatus.runtime, containerStatus.name)
+        await waitAnchorHealth()
+        daemonMeta = await detectRunningDaemon(exec)
+        if (daemonMeta) {
+          const updatedAnchor = {
+            ...(currentGlobalConfig?.anchordb || {}),
+            url: `wire://127.0.0.1:${daemonMeta.wire_port || WIRE_PORT_DEFAULT}`,
+            token: daemonMeta.token || currentGlobalConfig?.anchordb?.token || '',
+            sync: currentGlobalConfig?.anchordb?.sync !== false,
+            daemon: daemonMeta.daemon || daemonMeta.deamon,
+            deamon: daemonMeta.daemon || daemonMeta.deamon,
+            container_name: daemonMeta.container_name,
+            container_id: daemonMeta.container_id,
+            container_created_on: daemonMeta.container_created_on
+          }
+          await mergeGlobalAnchordb(home, updatedAnchor)
+          currentGlobalConfig = { ...currentGlobalConfig, anchordb: updatedAnchor }
+          process.stdout.write(`  [info] global config updated with ${daemonMeta.daemon || daemonMeta.deamon} daemon metadata\n`)
+        }
+      }
+    } else if (!daemonMeta && !containerStatus.exists) {
+      const hasConfigured = Boolean(currentGlobalConfig?.anchordb?.url)
+      let wantInstall = Boolean(values.runtime)
+      if (!wantInstall && interactive && !hasConfigured) {
+        wantInstall = await askYesNo(
+          rl,
+          'AnchorDB is not running. Would you like to create an AnchorDB container now?',
+          false
+        )
+      }
+      if (wantInstall) {
+        process.stdout.write('\nProvisioning AnchorDB container ...\n')
+        await runInstallCommand('anchordb', {
+          values: { ...values, method: 'container' },
+          rl
+        })
+        const freshGlobal = await readGlobalConfig()
+        currentGlobalConfig = freshGlobal.config || currentGlobalConfig
+        daemonMeta = await detectRunningDaemon(exec)
+      }
+    }
+
+    if (daemonMeta && currentGlobalConfig?.anchordb) {
+      const existing = currentGlobalConfig.anchordb
+      const daemonType = daemonMeta.daemon || daemonMeta.deamon || existing.daemon || existing.deamon
+      const updated = {
+        ...existing,
+        daemon: daemonType,
+        deamon: daemonType
+      }
+      if (daemonMeta.container_name) updated.container_name = daemonMeta.container_name
+      if (daemonMeta.container_id) updated.container_id = daemonMeta.container_id
+      if (daemonMeta.container_created_on) updated.container_created_on = daemonMeta.container_created_on
+
+      if (JSON.stringify(existing) !== JSON.stringify(updated)) {
+        await mergeGlobalAnchordb(home, updated)
+        currentGlobalConfig = { ...currentGlobalConfig, anchordb: updated }
+      }
+    }
+
+    let currentConfig = projectConfig || {}
+    const hasGlobalAnchor = Boolean(currentGlobalConfig?.anchordb)
+    const hasLocalAnchor = Boolean(projectConfig?.anchordb)
+    const hasAnchor = hasGlobalAnchor || hasLocalAnchor
+
+    if (hasAnchor) {
+      const slug = projectSlug(process.cwd())
+      const neededRoles = ['knowledges', 'sources']
+      let modelsUpdated = false
+      const nextModels = { ...(currentConfig.models || {}) }
+
+      for (const role of neededRoles) {
+        if (!nextModels[role]) {
+          const name = generateModelName()
+          await registerModel(name, { role, project: slug, cwd: process.cwd() })
+          nextModels[role] = name
+          modelsUpdated = true
+        }
+      }
+
+      if (modelsUpdated) {
+        currentConfig = { ...currentConfig, models: nextModels }
+        delete currentConfig.model
+        fs.writeFileSync(path.join(process.cwd(), 'knl-config.json'), JSON.stringify(currentConfig, null, 2) + '\n', 'utf8')
+        process.stdout.write(`  [4/5] anchordb models: mapped knowledges (${nextModels.knowledges}) and sources (${nextModels.sources}) in knl-config.json\n`)
+      } else {
+        process.stdout.write(`  [4/5] anchordb models: already mapped in knl-config.json\n`)
+      }
+
+      const targetAnchordb = {
+        ...(settings.anchordb || currentGlobalConfig?.anchordb || currentConfig?.anchordb),
+        model: nextModels.sources
+      }
+      const opts = anchordbClientOptions(targetAnchordb)
+      if (opts) {
+        try {
+          process.stdout.write('  syncing project sources to AnchorDB ...\n')
+          const client = await createAnchorWireClient(opts)
+          const result = await syncSourcesToAnchorDB(client, process.cwd(), {
+            labelDir: settings.labelDir,
+            include: settings.include,
+            exclude: settings.exclude
+          })
+          client.close()
+          process.stdout.write(`  sources sync complete: ${result.files} files, ${result.edges} edges\n`)
+        } catch (err) {
+          process.stdout.write(`  (sources sync deferred: ${err.message})\n`)
+        }
+      }
+    } else {
+      process.stdout.write('  [4/5] anchordb:       inactive (run "knl-view install anchordb" to enable)\n')
+    }
+
+    // Seed agent rules
+    let wantAgentRules = true
+    if (interactive) {
+      wantAgentRules = await askYesNo(
+        rl,
+        'Would you like to configure KNL-View as your primary code intelligence tool in your agent rule files (AGENTS.md, etc.)?',
+        true
+      )
+    }
+    if (wantAgentRules) {
+      const hasGraphify = await detectGraphify(exec)
+      const ruleActions = await seedAgentInstructions({ cwd: process.cwd(), home, hasGraphify })
+      for (const action of ruleActions) {
+        const rel = path.relative(process.cwd(), action.path)
+        const display = rel.startsWith('..') ? action.path : rel
+        process.stdout.write(`  [5/5] agent rules:    ${display} (${action.status}${hasGraphify ? ', graphify fallback enabled' : ''})\n`)
+      }
+    } else {
+      process.stdout.write('  [5/5] agent rules:    skipped by user\n')
+    }
+
+    process.stdout.write('\nSetup complete! You can now run:\n  knl-view           # start the viewer\n  knl-view graph trace --target=README.md\n')
+  } finally {
+    if (rl) rl.close()
+  }
+}
+
 function report(actions) {
   for (const action of actions) {
     const label = action.kind === 'dir' ? 'folder ' : 'file '
@@ -479,13 +767,14 @@ async function askYesNo(rl, question, fallback) {
 // prefers it): ghcr.io container via docker/podman. After install, the
 // "anchordb" block is written to the global config so every project can
 // connect right away.
-async function runInstallCommand(target, { values }) {
+async function runInstallCommand(target, { values, rl: externalRl = null }) {
   if (target !== 'anchordb') {
     fail(`Unknown install target: ${target || '(none)'}\nAvailable: knl-view install anchordb`)
   }
   const nativeOk = process.platform === 'linux' || process.platform === 'darwin'
   const interactive = Boolean(process.stdin.isTTY) && !values.yes
-  const rl = interactive ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null
+  const ownsRl = !externalRl && interactive
+  const rl = externalRl || (interactive ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null)
 
   let method = values.method
   if (!method) {
@@ -510,6 +799,36 @@ async function runInstallCommand(target, { values }) {
   // fs in this module is the callback API; installer steps need the promise version.
   const fsp = fs.promises
   let started = false
+  let daemonType = method === 'binary' ? 'binary' : null
+  let containerMetadata = null
+
+  const portInfo = await resolveAnchorPorts({
+    desiredWirePort: WIRE_PORT_DEFAULT,
+    desiredHttpPort: HTTP_PORT_DEFAULT
+  })
+
+  let wirePort = portInfo.wirePort
+  let httpPort = portInfo.httpPort
+
+  if (!portInfo.wireAvailable || !portInfo.httpAvailable) {
+    const conflictPort = !portInfo.wireAvailable ? wirePort : httpPort
+    const suggested = !portInfo.wireAvailable ? portInfo.suggestedWirePort : portInfo.suggestedHttpPort
+    let useSuggested = true
+    if (interactive) {
+      useSuggested = await askYesNo(
+        rl,
+        `Port ${conflictPort} is already in use. Would you like to use port ${suggested} instead?`,
+        true
+      )
+    }
+    if (useSuggested) {
+      wirePort = portInfo.suggestedWirePort
+      httpPort = portInfo.suggestedHttpPort
+      process.stdout.write(`  [port] selected wire port ${wirePort} and HTTP port ${httpPort}\n`)
+    } else {
+      fail(`Port ${conflictPort} is in use and alternative port was declined.`)
+    }
+  }
 
   try {
     if (method === 'binary') {
@@ -517,59 +836,81 @@ async function runInstallCommand(target, { values }) {
         fail('The binary method needs Linux or macOS.\nUse --method=container.')
       }
       const { version } = await latestRelease()
+      const knlViewDir = knlGlobalDir(home)
       const asset = releaseAssetName(version)
       const workdir = path.join(os.tmpdir(), `knlview-install-${Date.now()}`)
       await fsp.mkdir(workdir, { recursive: true })
-      const binDir = path.join(home, '.knlview', 'bin')
+      try {
+        const binDir = path.join(knlViewDir, 'bin')
 
-      process.stdout.write(`Downloading ${asset} (v${version}) ...\n`)
-      const archive = path.join(workdir, asset)
-      await downloadFile(`https://github.com/rachmanzz/anchordb/releases/download/v${version}/${asset}`, archive)
-      const sums = path.join(workdir, 'SHA256SUMS.txt')
-      await downloadFile(`https://github.com/rachmanzz/anchordb/releases/download/v${version}/SHA256SUMS.txt`, sums)
-      await verifySha256(archive, await fsp.readFile(sums, 'utf8'))
-      process.stdout.write('  SHA256 matches SHA256SUMS.txt\n')
+        process.stdout.write(`Downloading ${asset} (v${version}) ...\n`)
+        const archive = path.join(workdir, asset)
+        await downloadFile(`https://github.com/rachmanzz/anchordb/releases/download/v${version}/${asset}`, archive)
+        const sums = path.join(workdir, 'SHA256SUMS.txt')
+        await downloadFile(`https://github.com/rachmanzz/anchordb/releases/download/v${version}/SHA256SUMS.txt`, sums)
+        await verifySha256(archive, await fsp.readFile(sums, 'utf8'))
+        process.stdout.write('  SHA256 matches SHA256SUMS.txt\n')
 
-      process.stdout.write('Extracting ...\n')
-      await exec('tar', ['-xzf', archive, '-C', workdir])
-      await fsp.mkdir(binDir, { recursive: true })
-      for (const bin of ['anchordb-server', 'anchordb']) {
-        const target2 = path.join(binDir, bin)
-        await fsp.copyFile(path.join(workdir, bin), target2)
-        await fsp.chmod(target2, 0o755)
+        process.stdout.write('Extracting ...\n')
+        await exec('tar', ['-xzf', archive, '-C', workdir])
+        await fsp.mkdir(binDir, { recursive: true, mode: 0o700 })
+        for (const bin of ['anchordb-server', 'anchordb']) {
+          const target2 = path.join(binDir, bin)
+          await fsp.copyFile(path.join(workdir, bin), target2)
+          await fsp.chmod(target2, 0o755)
+        }
+        process.stdout.write(`  installed to ${binDir}\n`)
+      } finally {
+        await fsp.rm(workdir, { recursive: true, force: true }).catch(() => {})
       }
-      process.stdout.write(`  installed to ${binDir}\n`)
 
       const runNow = interactive
         ? await askYesNo(rl, 'Start the AnchorDB server now?', true)
         : true
       if (runNow) {
-        const dataDir = path.join(home, '.knlview', 'anchordb-data')
+        const dataDir = path.join(knlViewDir, 'anchordb-data')
         await fsp.mkdir(dataDir, { recursive: true })
-        const logFd = await fsp.open(path.join(home, '.knlview', 'anchordb.log'), 'a')
+        const logFd = await fsp.open(path.join(knlViewDir, 'anchordb.log'), 'a')
         const child = spawn(path.join(binDir, 'anchordb-server'), [], {
           env: {
             ...process.env,
             ANCHORDB_AUTH_TOKEN: token,
             ANCHORDB_DATA_DIR: dataDir,
-            ANCHORDB_PORT: String(HTTP_PORT_DEFAULT),
-            ANCHORDB_WIRE_PORT: String(WIRE_PORT_DEFAULT)
+            ANCHORDB_PORT: String(httpPort),
+            ANCHORDB_WIRE_PORT: String(wirePort)
           },
           detached: true,
           stdio: ['ignore', logFd.fd, logFd.fd]
         })
         child.unref()
         logFd.close()
-        await waitAnchorHealth()
+        await waitAnchorHealth(httpPort)
         started = true
-        process.stdout.write(`  server running (log: ${path.join(home, '.knlview', 'anchordb.log')})\n`)
+        process.stdout.write(`  server running (log: ${path.join(knlViewDir, 'anchordb.log')})\n`)
       }
     } else {
-      const runtime = await detectContainerRuntime(async (cmd) => {
+      const preferredRuntime = values.runtime
+      if (preferredRuntime && !['docker', 'podman'].includes(preferredRuntime)) {
+        fail(`--runtime must be docker or podman, got "${preferredRuntime}".`)
+      }
+      const which = async (cmd) => {
         try { await exec(cmd, ['--version']); return true } catch { return false }
-      })
-      if (!runtime) {
+      }
+      const available = await availableContainerRuntimes(which)
+      if (!available.length) {
         fail('docker/podman not found.\nInstall one first: Docker Desktop (macOS/Windows) or podman.')
+      }
+      let runtime = preferredRuntime
+      if (!runtime) {
+        if (available.length === 1) {
+          runtime = available[0]
+        } else {
+          runtime = interactive
+            ? await askChoice(rl, 'Container runtime to use?', available.map((r) => [r, r]), available[0])
+            : available[0]
+        }
+      } else if (!available.includes(runtime)) {
+        fail(`Runtime "${runtime}" was requested via --runtime, but it is not installed or available on this system.`)
       }
       const { version } = await latestRelease()
       const image = `${GHCR_IMAGE}:${version}`
@@ -583,14 +924,19 @@ async function runInstallCommand(target, { values }) {
         fail(`Container "${CONTAINER_NAME}" already exists.\nRemove it first if you really want to reinstall: ${runtime} rm -f ${CONTAINER_NAME}`)
       }
 
-      const dataDir = path.join(home, '.knlview', 'anchordb-data')
-      await fsp.mkdir(dataDir, { recursive: true })
-      await fsp.chmod(dataDir, 0o777)
+      const knlViewDir = knlGlobalDir(home)
+      await fsp.mkdir(knlViewDir, { recursive: true, mode: 0o700 })
+      try { await fsp.chmod(knlViewDir, 0o700) } catch {}
+      const dataDir = path.join(knlViewDir, 'anchordb-data')
+      await fsp.mkdir(dataDir, { recursive: true, mode: 0o770 })
+      try { await fsp.chmod(dataDir, 0o770) } catch {}
       const baseArgs = ['run', '-d', '--name', CONTAINER_NAME,
-        '-p', `${HTTP_PORT_DEFAULT}:${HTTP_PORT_DEFAULT}`,
-        '-p', `${WIRE_PORT_DEFAULT}:${WIRE_PORT_DEFAULT}`,
+        '-p', `${httpPort}:${httpPort}`,
+        '-p', `${wirePort}:${wirePort}`,
         '-e', `ANCHORDB_AUTH_TOKEN=${token}`,
-        '-e', 'ANCHORDB_DATA_DIR=/data']
+        '-e', 'ANCHORDB_DATA_DIR=/data',
+        '-e', `ANCHORDB_PORT=${httpPort}`,
+        '-e', `ANCHORDB_WIRE_PORT=${wirePort}`]
       // The image runs as user "anchordb" (not root). Rootless podman maps
       // that uid to a different host uid, so data files owned by the host
       // user become unreadable ("permission denied"). keep-id runs the
@@ -598,27 +944,53 @@ async function runInstallCommand(target, { values }) {
       // container can share the folder. Docker (macOS/Windows) runs in a VM
       // and its bind mounts are unaffected, hence no flag here.
       if (runtime === 'podman') baseArgs.push('--userns=keep-id')
+      daemonType = runtime
+      let containerId = null
+      let containerCreatedOn = new Date().toISOString()
       process.stdout.write(`Starting container ...\n`)
       try {
-        await exec(runtime, [...baseArgs, '-v', `${dataDir}:/data:Z`, image])
+        const { stdout } = await exec(runtime, [...baseArgs, '-v', `${dataDir}:/data:Z`, image])
+        containerId = stdout.trim().split('\n')[0]
       } catch {
         // Rootless/sandbox setups sometimes reject volume binds; without a
         // volume the data dies with the container, so we say so plainly.
         process.stdout.write('  volume could not be mounted; data is ephemeral inside the container\n')
-        await exec(runtime, [...baseArgs, image])
+        const { stdout } = await exec(runtime, [...baseArgs, image])
+        containerId = stdout.trim().split('\n')[0]
       }
-      await waitAnchorHealth()
+      try {
+        const { stdout: idOut } = await exec(runtime, ['inspect', '--format', '{{.Id}}', CONTAINER_NAME])
+        if (idOut.trim()) containerId = idOut.trim()
+        const { stdout: createdOut } = await exec(runtime, ['inspect', '--format', '{{.Created}}', CONTAINER_NAME])
+        if (createdOut.trim()) containerCreatedOn = createdOut.trim()
+      } catch {
+        // fallback to captured containerId and timestamp
+      }
+      containerMetadata = {
+        container_created_on: containerCreatedOn,
+        container_name: CONTAINER_NAME,
+        container_id: containerId
+      }
+      await waitAnchorHealth(httpPort)
       started = true
     }
   } catch (err) {
     fail(`Install failed: ${err.message || err}`)
   }
 
-  const before = await mergeGlobalAnchordb(home, {
-    url: `wire://127.0.0.1:${WIRE_PORT_DEFAULT}`,
+  const anchordbBlock = {
+    url: `wire://127.0.0.1:${wirePort}`,
     token,
-    sync: true
-  })
+    sync: true,
+    deamon: daemonType
+  }
+  if (containerMetadata) {
+    anchordbBlock.container_created_on = containerMetadata.container_created_on
+    anchordbBlock.container_name = containerMetadata.container_name
+    anchordbBlock.container_id = containerMetadata.container_id
+  }
+
+  const before = await mergeGlobalAnchordb(home, anchordbBlock)
   if (before) {
     process.stdout.write('  (old anchordb block in the global config overwritten; new token applied)\n')
   }
@@ -626,10 +998,10 @@ async function runInstallCommand(target, { values }) {
   process.stdout.write(
     `\nAnchorDB ready (optional layer: projects without an anchordb block\n` +
       `  in the global config still run fully local).\n` +
-      `  HTTP   http://127.0.0.1:${HTTP_PORT_DEFAULT}/health${started ? ' (already responding)' : ''}\n` +
-      `  wire   wire://127.0.0.1:${WIRE_PORT_DEFAULT}\n` +
-      `  token  ${token.slice(0, 8)}... (full value in ~/.knlview/knl-config.json)\n` +
-      `  config ${home}/.knlview/knl-config.json\n\n` +
+      `  HTTP   http://127.0.0.1:${httpPort}/health${started ? ' (already responding)' : ''}\n` +
+      `  wire   wire://127.0.0.1:${wirePort}\n` +
+      `  token  ${token.slice(0, 8)}... (full value in ${globalConfigPath(home)})\n` +
+      `  config ${globalConfigPath(home)}\n\n` +
       `Next steps (if this project should use sync):\n` +
       `  1. In your project: knl-view model new knowledges\n` +
       `  2. knl-view, the "anchordb connected" line appears once the graph is in sync\n`
@@ -640,19 +1012,20 @@ async function runInstallCommand(target, { values }) {
         `     ~/.knlview/bin/anchordb-server  (env: ANCHORDB_AUTH_TOKEN, ANCHORDB_DATA_DIR)\n`
     )
   }
+  if (ownsRl && rl) rl.close()
 }
 
-async function waitAnchorHealth(attempts = 30) {
+async function waitAnchorHealth(httpPort = HTTP_PORT_DEFAULT, attempts = 30) {
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(`http://127.0.0.1:${HTTP_PORT_DEFAULT}/health`)
+      const res = await fetch(`http://127.0.0.1:${httpPort}/health`, { signal: AbortSignal.timeout(2000) })
       if (res.ok) return
     } catch {
       // not ready yet, retry
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
-  throw new Error(`server not responding at http://127.0.0.1:${HTTP_PORT_DEFAULT}/health within ${attempts / 2} seconds, check the anchordb log`)
+  throw new Error(`server not responding at http://127.0.0.1:${httpPort}/health within ${attempts / 2} seconds, check the anchordb log`)
 }
 
 async function containerExists(runtime) {
@@ -793,7 +1166,11 @@ async function runSourcesCommand(sub, values, { settings }) {
   const projectRoot = process.cwd()
 
   if (sub === 'sync') {
-    const result = await syncSourcesToAnchorDB(client, projectRoot, { labelDir: settings.labelDir })
+    const result = await syncSourcesToAnchorDB(client, projectRoot, {
+      labelDir: settings.labelDir,
+      include: settings.include,
+      exclude: settings.exclude
+    })
     const parts = [
       `${result.files} files`,
       `${result.symbols} symbols`,

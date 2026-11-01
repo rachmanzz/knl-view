@@ -5,9 +5,9 @@ import { countLabel, formatBytes } from '../format.js'
 import IndexRow from '../components/IndexRow.jsx'
 import { t } from '../i18n.js'
 
-// Rute alias `#/a/contents`: daftar isi seluruh basis. Isinya lahir dari
-// pohon yang sudah disaring server (entri `ignore` di map.json tidak pernah
-// sampai ke sini) dan sudah memakai judul ganti dari map.json.
+// Alias route `#/a/contents`: full table of contents for the entire base.
+// Derived from the server-filtered tree (entries ignored in map.json never
+// reach here) and using title overrides from map.json.
 export default function Contents() {
   const { meta, tree } = useKnowledge()
 

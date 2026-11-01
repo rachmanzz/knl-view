@@ -31,16 +31,18 @@ Nothing here yet. Put markdown files in this folder.
 
 export async function scaffoldBase({ root, structure, folders = [] }) {
   const actions = []
-  await fs.mkdir(root, { recursive: true })
-  actions.push({ kind: 'dir', path: root, status: 'created' })
+  const rootAbs = path.resolve(root)
+  await fs.mkdir(rootAbs, { recursive: true })
+  actions.push({ kind: 'dir', path: rootAbs, status: 'created' })
 
   if (structure === 'empty') return actions
 
   const dirs = structure === 'custom' ? folders.map(cleanRel).filter(Boolean) : STANDARD_DIRS
 
-  await writeFileSafe(path.join(root, 'README.md'), ROOT_README, actions)
+  await writeFileSafe(path.join(rootAbs, 'README.md'), ROOT_README, actions)
   for (const dir of dirs) {
-    const abs = path.join(root, dir)
+    const abs = path.resolve(rootAbs, dir)
+    if (!abs.startsWith(rootAbs + path.sep)) continue
     await fs.mkdir(abs, { recursive: true })
     actions.push({ kind: 'dir', path: abs, status: 'created' })
     await writeFileSafe(path.join(abs, 'README.md'), SECTION_README(dir), actions)
@@ -78,6 +80,89 @@ export async function ensureGitignore({ cwd }) {
   return { path: abs, status: 'created' }
 }
 
+export function buildAgentInstructionBlock(hasGraphify = false) {
+  const fallback = hasGraphify
+    ? `- Graphify is the fallback. Use it only when a specific need remains unresolved by KNL-View or the user explicitly requests Graphify. If KNL-View answers the task, stop; do not run Graphify for duplicate analysis.
+- When the user explicitly invokes \`/graphify\`, honor that request without automatically running both tools.
+
+`
+    : ''
+
+  return `<!-- knl-view:start -->
+# Knowledge graph tools
+- KNL-View is the primary graph tool. For \`.knowledges\`, source graphs, and project graph questions, read the project's \`knl-view\` skill and use the relevant KNL-View feature first.
+${fallback}## KNL-View graph access
+- Use the KNL-View feature that fits the task (\`graph trace\`, \`sources trace/sync/collect\`, \`model check/new\`, consensus commands, or the viewer). Do not approximate a supported KNL-View operation with ad-hoc graph queries.
+- Route all graph reads and writes through KNL-View's documented CLI, viewer, or application endpoints. Never connect to AnchorDB directly through AnchorWire, its CLI, direct database endpoints, files, SQL, or custom clients/scripts. If KNL-View cannot perform a requested operation, explain the limitation; do not bypass it.
+- Keep graph work targeted: specify the relevant node/path, direction, and smallest useful hop count; summarize only relevant nodes and edges; avoid dumping whole graphs or large raw JSON.
+- Follow the KNL-View skill's trace-before-edit and \`sources sync\`-after-change rules. Treat edge direction as lineage; do not claim causality without separate evidence.
+<!-- knl-view:end -->`
+}
+
+export function stripLegacyKnlInstructions(text) {
+  let cleaned = text
+  cleaned = cleaned.replace(/<!-- knl-view:start -->[\s\S]*?<!-- knl-view:end -->/g, '\n')
+  cleaned = cleaned.replace(/<!--\s*knl-view:(?:start|end)\s*-->/g, '\n')
+  cleaned = cleaned.replace(
+    /(?:^|\n)# Knowledge graph tools[\s\S]*?(?=(?:\n#+\s)|$)/g,
+    '\n'
+  )
+  cleaned = cleaned.replace(
+    /(?:^|\n)## KNL-View graph access[\s\S]*?(?=(?:\n#+\s)|$)/g,
+    '\n'
+  )
+  return cleaned.trim()
+}
+
+export async function seedAgentInstructions({ cwd = process.cwd(), home = process.env.HOME, hasGraphify = false }) {
+  const block = buildAgentInstructionBlock(hasGraphify)
+  const candidatePaths = [
+    // Project files:
+    path.join(cwd, 'AGENTS.md'),
+    path.join(cwd, 'GEMINI.md'),
+    path.join(cwd, 'CLAUDE.md'),
+    // Global files:
+    path.join(home || '', '.codex', 'AGENTS.md'),
+    path.join(home || '', '.gemini', 'GEMINI.md'),
+    path.join(home || '', '.claude', 'CLAUDE.md'),
+    path.join(home || '', '.agents', 'AGENTS.md')
+  ]
+
+  const actions = []
+
+  for (const abs of candidatePaths) {
+    const parentDir = path.dirname(abs)
+    const parentExists = await statOrNull(parentDir)
+    if (!parentExists) continue
+
+    const stat = await statOrNull(abs)
+    if (stat && stat.isFile()) {
+      const content = await fs.readFile(abs, 'utf8')
+      const cleaned = stripLegacyKnlInstructions(content)
+      const next = cleaned.length ? `${cleaned}\n\n${block}\n` : `${block}\n`
+
+      if (next !== content) {
+        await fs.writeFile(abs, next, 'utf8')
+        actions.push({ path: abs, status: 'updated' })
+      } else {
+        actions.push({ path: abs, status: 'skipped' })
+      }
+    }
+  }
+
+  // If no project file was found/updated, create ./AGENTS.md
+  const projectAgent = path.join(cwd, 'AGENTS.md')
+  if (!actions.some((a) => a.path.startsWith(cwd))) {
+    const stat = await statOrNull(projectAgent)
+    if (!stat) {
+      await fs.writeFile(projectAgent, `${block}\n`, 'utf8')
+      actions.push({ path: projectAgent, status: 'created' })
+    }
+  }
+
+  return actions
+}
+
 async function writeFileSafe(abs, content, actions) {
   const exists = await statOrNull(abs)
   if (exists) {
@@ -89,7 +174,12 @@ async function writeFileSafe(abs, content, actions) {
 }
 
 function cleanRel(value) {
-  return String(value).trim().replace(/^\/+/, '').replace(/\/+$/, '')
+  const cleaned = String(value || '').trim()
+  const normalized = path.normalize(cleaned).replace(/^(\.\.[\/\\])+/, '').replace(/^[\/\\]+/, '').replace(/[\/\\]+$/, '')
+  if (!normalized || normalized === '.' || normalized === '..' || normalized.startsWith('..' + path.sep)) {
+    return ''
+  }
+  return normalized
 }
 
 async function statOrNull(abs) {
@@ -152,10 +242,10 @@ then folders.
   },
   "files": {
     "personal-assistant.md": { "title": "Personal Assistant" },
-    "rahasia.md": { "ignore": true }
+    "secret.md": { "ignore": true }
   },
   "dirs": {
-    "draft-lama": { "ignore": true }
+    "old-drafts": { "ignore": true }
   }
 }
 \`\`\`
@@ -173,7 +263,7 @@ then folders.
 bring it back:
 
 \`\`\`json
-{ "files": { "rahasia.md": { "ignore": true } }, "dirs": { "draft-lama": { "ignore": true } } }
+{ "files": { "secret.md": { "ignore": true } }, "dirs": { "old-drafts": { "ignore": true } } }
 \`\`\`
 
 Paths are relative to the \`.knowledges\` root, use \`/\` separators, and
@@ -340,7 +430,7 @@ of that directory.
 
 Every roast must state:
 - \`Severity\`: \`P0|P1|P2|P3\`
-- \`Class\`: \`BUG|PERF|VULN|DEBT|CEILING|PROSES\`
+- \`Class\`: \`BUG|PERF|VULN|DEBT|CEILING|PROCESS\`
 
 ## When the agent triggers the graph
 

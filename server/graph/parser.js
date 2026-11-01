@@ -36,7 +36,7 @@ export function extractFrontmatterAndTitle(content) {
 
 function parseSimpleYaml(text) {
   const result = {}
-  const lines = text.split('\n')
+  const lines = text.replace(/\r/g, '').split('\n')
   for (const line of lines) {
     const match = line.match(/^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/)
     if (!match) continue
@@ -150,7 +150,8 @@ function appendList(existing, val) {
   return existing.concat(items.filter((item) => !existing.includes(item)))
 }
 
-function parseSingleDecisionBlock(relPath, rawBlock) {  const lines = rawBlock.split('\n')
+function parseSingleDecisionBlock(relPath, rawBlock) {
+  const lines = rawBlock.replace(/\r/g, '').split('\n')
   let title = 'Untitled Decision'
   let id = null
   let decidedAt = null

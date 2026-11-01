@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useKnowledge, useKnowledgeIndex } from '../knowledge.jsx'
 import { fetchDoc } from '../api.js'
 import { docHref, dirHref } from '../router.js'

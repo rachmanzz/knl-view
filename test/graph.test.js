@@ -2,11 +2,12 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import fs from 'node:fs'
+import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { GraphNode, GraphEdge, DirectedGraph } from '../server/graph/model.js'
-import { parseKnowledgeContent, parseDecisionBlocks, buildGraphFromRoot } from '../server/graph/parser.js'
+import { parseKnowledgeContent, parseDecisionBlocks, buildGraphFromRoot, extractFrontmatterAndTitle } from '../server/graph/parser.js'
 import { createKnowledgeServer } from '../server/index.js'
 import {
   createAnchorWireClient,
@@ -210,6 +211,13 @@ It supports multi-hop traversal and causal chains.
     assert.ok(readme)
     assert.equal(readme.type, 'knowledge')
   })
+
+  test('extractFrontmatterAndTitle parses files with Windows CRLF line endings', () => {
+    const crlfContent = "---\r\ntitle: Windows CRLF Title\r\ndepends_on: [docA, docB]\r\n---\r\n# Fallback Title\r\n\r\nBody text.\r\n"
+    const parsed = extractFrontmatterAndTitle(crlfContent)
+    assert.equal(parsed.title, 'Windows CRLF Title')
+    assert.deepEqual(parsed.metadata.depends_on, ['docA', 'docB'])
+  })
 })
 
 describe('Server Graph HTTP Endpoints', () => {
@@ -242,6 +250,24 @@ describe('Server Graph HTTP Endpoints', () => {
       assert.equal(resErr.status, 400)
       const errData = await resErr.json()
       assert.ok(errData.error)
+
+      // 4. Test HTTP 405 Method Not Allowed for non-GET / non-HEAD requests
+      const resPost = await fetch(`${baseUrl}/api/meta`, { method: 'POST' })
+      assert.equal(resPost.status, 405)
+      assert.equal(resPost.headers.get('allow'), 'GET, HEAD')
+
+      // 5. Test symlink traversal rejection in /api/doc
+      const symlinkTarget = path.join(os.tmpdir(), `knl-secret-${Date.now()}.txt`)
+      fs.writeFileSync(symlinkTarget, 'secret outside root', 'utf8')
+      const symlinkPath = path.join(knlDir, 'secret_link.md')
+      try {
+        fs.symlinkSync(symlinkTarget, symlinkPath)
+        const resSymlink = await fetch(`${baseUrl}/api/doc?path=secret_link.md`)
+        assert.equal(resSymlink.status, 400)
+      } finally {
+        if (fs.existsSync(symlinkPath)) fs.unlinkSync(symlinkPath)
+        if (fs.existsSync(symlinkTarget)) fs.unlinkSync(symlinkTarget)
+      }
     } finally {
       await new Promise((resolve) => server.close(resolve))
     }

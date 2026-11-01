@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { knlGlobalDir, syncStatePath } from './config.js'
 
 // Consensus: agreement and conflict between claims, stored purely in
 // AnchorDB as a second model (the "consensus" role in the project's models
@@ -42,18 +43,22 @@ export function deriveStatus(supporters, objectors) {
   return 'uncontested'
 }
 
-/** Local cache path for claim statements: ~/.knlview/claims/<model>.json */
-export function claimsIndexPath(model, home = process.env.HOME) {
-  return path.join(home || '', '.knlview', 'claims', `${model}.json`)
+/** Local cache path for claim statements: ~/.knlview/claims/<model>.json (or %APPDATA%\knlview\claims\ on Windows) */
+export function claimsIndexPath(model, home = null, options = {}) {
+  return path.join(knlGlobalDir(home, options), 'claims', `${model}.json`)
+}
+
+export function consensusMirrorPath(model, home = null, options = {}) {
+  return path.join(knlGlobalDir(home, options), 'consensus', `${model}.json`)
 }
 
 /**
  * Read the claim index. Missing file = empty index, not an error.
  * @returns {Promise<{claims: object, error: string|null}>}
  */
-export async function readClaimsIndex(model, home = process.env.HOME) {
+export async function readClaimsIndex(model, home = null, options = {}) {
   try {
-    const parsed = JSON.parse(await fs.readFile(claimsIndexPath(model, home), 'utf8'))
+    const parsed = JSON.parse(await fs.readFile(claimsIndexPath(model, home, options), 'utf8'))
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { claims: {}, error: 'claim index is not an object' }
     }
@@ -74,13 +79,13 @@ export async function readClaimsIndex(model, home = process.env.HOME) {
  * Register a claim statement in the local index. Content-addressed, so
  * re-registering the same statement is an idempotent update.
  */
-export async function recordClaim(model, text, home = process.env.HOME) {
+export async function recordClaim(model, text, home = null, options = {}) {
   const id = claimId(text)
-  const { claims, error } = await readClaimsIndex(model, home)
+  const { claims, error } = await readClaimsIndex(model, home, options)
   if (error) return { id, written: false, error }
   if (!claims[id]) claims[id] = { text: String(text).trim(), createdAt: new Date().toISOString() }
   try {
-    const file = claimsIndexPath(model, home)
+    const file = claimsIndexPath(model, home, options)
     await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(file, JSON.stringify(claims, null, 2) + '\n', 'utf8')
     return { id, written: true, error: null }
@@ -104,9 +109,9 @@ export function consensusEdgeKey(from, type, to) {
  * Read the consensus mirror for one model. Returns the edge key list, or
  * null when there is no mirror (never synced, or wiped).
  */
-export async function readConsensusMirror(model, home = process.env.HOME) {
+export async function readConsensusMirror(model, home = null, options = {}) {
   try {
-    const file = path.join(home || '', '.knlview', 'sync-state', `${model}.json`)
+    const file = syncStatePath(model, home, options)
     const parsed = JSON.parse(await fs.readFile(file, 'utf8'))
     if (parsed?.model !== model || !Array.isArray(parsed.edges)) return null
     return parsed.edges
@@ -120,15 +125,15 @@ export async function readConsensusMirror(model, home = process.env.HOME) {
  * write is reported but never blocks the server mutation that already
  * succeeded.
  */
-export async function updateConsensusMirror(model, change, home = process.env.HOME) {
-  const edges = new Set(await readConsensusMirror(model, home) || [])
+export async function updateConsensusMirror(model, change, home = null, options = {}) {
+  const edges = new Set(await readConsensusMirror(model, home, options) || [])
   if (change.op === 'link') edges.add(consensusEdgeKey(change.from, change.type, change.to))
   if (change.op === 'unlink') {
     edges.delete(consensusEdgeKey(change.from, 'agrees_with', change.to))
     edges.delete(consensusEdgeKey(change.from, 'contradicts', change.to))
   }
   try {
-    const file = path.join(home || '', '.knlview', 'sync-state', `${model}.json`)
+    const file = syncStatePath(model, home, options)
     await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(file, JSON.stringify({
       model,

@@ -1,9 +1,9 @@
 /* ============================================================
-   layout.css: kerangka halaman
-   Kolom kiri: indeks permanen (sticky, tinggi penuh layar).
-   Kolom kanan: topbar sticky + bacaan tunggal. Garis hitam tebal
-   menandai blok judul, garis rambut memisahkan baris. Semua
-   perubahan tata letak langsung, tanpa animasi (MOTION 1).
+   layout.css: page layout frame
+   Left column: permanent index (sticky, full viewport height).
+   Right column: sticky topbar + single content pane. Thick black rule
+   marks heading blocks, hairline divides rows. Layout changes are
+   immediate with no transitions (MOTION 1).
    ============================================================ */
 
 .shell {
@@ -57,8 +57,8 @@
   overflow-wrap: anywhere;
 }
 
-/* Tombol tutup hanya ada di mode laci (layar kecil).
-   Selektor rangkap agar menang atas `.btn { display }` di ui.css. */
+/* Close button only exists in drawer mode (mobile viewports).
+   Dual selector ensures higher specificity over `.btn { display }` in ui.css. */
 .btn.sidebar-close {
   display: none;
 }
@@ -98,7 +98,7 @@
   border-color: var(--ink);
 }
 
-/* Pohon navigasi: satu-satunya area yang menggulir di sidebar. */
+/* Navigation tree: the only scrolling region in the sidebar. */
 .nav {
   flex: 1;
   min-height: 0;
@@ -123,7 +123,7 @@
   overflow-wrap: anywhere;
 }
 
-/* --- Kolom kanan --- */
+/* --- Right column --- */
 
 .main-col {
   display: flex;
@@ -147,7 +147,7 @@
   border-bottom: 1px solid var(--ink);
 }
 
-/* Tombol indeks hanya tampil sebagai laci di bawah 60rem (ui.css). */
+/* Menu button only displays as a drawer below 60rem (ui.css). */
 .btn.topbar-menu {
   display: none;
 }
@@ -164,7 +164,7 @@
   text-overflow: ellipsis;
 }
 
-/* --- Banner gagal muat ulang --- */
+/* --- Reload failure banner --- */
 
 .banner {
   margin: var(--s-4) var(--s-5) 0;
@@ -176,7 +176,7 @@
   color: var(--ink);
 }
 
-/* --- Isi --- */
+/* --- Content body --- */
 
 .content {
   flex: 1;
@@ -202,14 +202,14 @@
 }
 
 /* ============================================================
-   Beranda
+   Home
    ============================================================ */
 
 .home {
   max-width: 62rem;
 }
 
-/* Blok judul Swiss: garis hitam tebal di atas, rambut di bawah. */
+/* Swiss masthead block: thick top rule, hairline bottom rule. */
 .masthead {
   border-top: 5px solid var(--ink);
   padding-top: var(--s-4);

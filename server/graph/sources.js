@@ -3,6 +3,7 @@ import path from 'node:path'
 import { GraphNode } from './model.js'
 import { edgeKey } from './anchordb_client.js'
 import { SYNTAX_LANGUAGES, extractCode } from './syntax.js'
+import { createPathMatcher } from '../config.js'
 
 // Sources graph: the whole project as a dependency graph in AnchorDB, not
 // just the .knowledges markdown. Nodes are the files (id = repo relative
@@ -72,27 +73,42 @@ function fileAttrs(stat) {
  * graph: { rel -> { size, mtime } }. Skips dot-prefixed folders except
  * .github, the default ignore list, and basic .gitignore patterns.
  */
-export async function scanSourceFiles(rootAbs) {
+function compileIgnorePattern(pattern) {
+  if (!pattern || !pattern.includes('*')) return null
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')
+  try {
+    return new RegExp('^' + escaped + '$')
+  } catch {
+    return null
+  }
+}
+
+export async function scanSourceFiles(rootAbs, { include = null, exclude = null } = {}) {
+  const excludeFilter = createPathMatcher(exclude)
+  const includeFilter = createPathMatcher(include)
+
   const rules = []
   try {
     const gitignore = await fs.readFile(path.join(rootAbs, '.gitignore'), 'utf8')
     for (const line of gitignore.split('\n')) {
       const rule = ignoreRule(line)
-      if (rule) rules.push(rule)
+      if (rule) {
+        rule.regex = compileIgnorePattern(rule.pattern)
+        rules.push(rule)
+      }
     }
   } catch {
     // No .gitignore: the default list still applies.
   }
-  rules.push(...DEFAULT_IGNORES.map((pattern) => ({ dirOnly: true, pattern })))
+  rules.push(...DEFAULT_IGNORES.map((pattern) => ({ dirOnly: true, pattern, regex: compileIgnorePattern(pattern) })))
 
-  const ignored = (rel) => {
+  const isDefaultIgnored = (rel, isDir) => {
     const segments = rel.split('/')
     if (segments.some((s) => s.startsWith('.') && s !== '.github')) return true
     return segments.some((segment) =>
       rules.some((rule) => {
-        if (rule.pattern.includes('*')) {
-          const re = new RegExp('^' + rule.pattern.replace(/\*/g, '[^/]*') + '$')
-          return re.test(segment) || re.test(rel)
+        if (rule.regex) {
+          return rule.regex.test(segment) || rule.regex.test(rel)
         }
         if (rule.dirOnly) return segments.includes(rule.pattern)
         return segment === rule.pattern || rel === rule.pattern
@@ -109,15 +125,39 @@ export async function scanSourceFiles(rootAbs) {
       return
     }
     for (const entry of entries) {
-      if (entry.name.startsWith('.') && entry.name !== '.github') continue
       const childRel = rel ? `${rel}/${entry.name}` : entry.name
-      if (ignored(childRel)) continue
-      const childAbs = path.join(dirAbs, entry.name)
-      if (entry.isDirectory()) {
-        await walk(childAbs, childRel)
+
+      // 1. Hard exclude: knl-config exclude is truly excluded, always wins
+      if (excludeFilter && excludeFilter.matches(childRel, entry.name)) {
         continue
       }
+
+      // 2. Explicit include overrides default excludes
+      const isExplicitlyIncluded = includeFilter && includeFilter.matches(childRel, entry.name)
+      const isDirPrefixOfInclude = entry.isDirectory() && includeFilter && includeFilter.isPrefixOfAny(childRel)
+
+      if (entry.isDirectory()) {
+        if (!isExplicitlyIncluded && !isDirPrefixOfInclude) {
+          if (includeFilter) {
+            continue
+          }
+          if (isDefaultIgnored(childRel, true)) {
+            continue
+          }
+        }
+        await walk(path.join(dirAbs, entry.name), childRel)
+        continue
+      }
+
       if (!entry.isFile()) continue
+
+      if (includeFilter) {
+        if (!isExplicitlyIncluded) continue
+      } else {
+        if (isDefaultIgnored(childRel, false)) continue
+      }
+
+      const childAbs = path.join(dirAbs, entry.name)
       try {
         files[childRel] = fileAttrs(await fs.stat(childAbs))
       } catch {
@@ -193,8 +233,8 @@ export function resolveImportSpecifier(fromRel, spec, files) {
  * `<path>#<name>`; class methods are `Class.method`. Returns plain arrays
  * so callers can diff without depending on the DirectedGraph type.
  */
-export async function buildSourcesGraph(rootAbs, files = null) {
-  const scanned = files || await scanSourceFiles(rootAbs)
+export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
+  const scanned = files || await scanSourceFiles(rootAbs, options)
   const modulePath = await goModulePath(rootAbs)
   const edges = []
   const symbolIndex = new Map() // symbol name -> [node id, ...] for call resolution
@@ -359,7 +399,10 @@ export function labelContent(rel, symbols) {
  * symbol is gone. Generated files only; never touches anything else.
  */
 export async function writeLabelFiles(rootAbs, labelDir = DEFAULT_LABEL_DIR, symbolsByFile) {
-  const base = path.join(rootAbs, labelDir)
+  const base = path.resolve(rootAbs, labelDir)
+  if (base !== rootAbs && !base.startsWith(rootAbs + path.sep)) {
+    throw new Error(`labelDir "${labelDir}" resolves outside the project root`)
+  }
   const expected = new Map()
   for (const [rel, symbols] of symbolsByFile) expected.set(rel, labelContent(rel, symbols))
 
@@ -423,8 +466,8 @@ export async function writeLabelFiles(rootAbs, labelDir = DEFAULT_LABEL_DIR, sym
  * @returns {Promise<{linked, unlinked, saved, tombstoned, failed, orphans,
  *   files, symbols, edges, labels}>}
  */
-export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir } = {}) {
-  const { nodes, edges, symbolsByFile } = await buildSourcesGraph(rootAbs)
+export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir, include = null, exclude = null } = {}) {
+  const { nodes, edges, symbolsByFile } = await buildSourcesGraph(rootAbs, null, { include, exclude })
   const desired = desiredSourceEdgeKeys(edges)
   const diskIds = new Set(nodes.map((node) => node.id))
 

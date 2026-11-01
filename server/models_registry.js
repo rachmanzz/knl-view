@@ -1,8 +1,12 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import os from 'node:os'
+import { knlGlobalDir } from './config.js'
 
-// Global registry of AnchorDB model names: ~/.knlview/models.json.
+// Global registry of AnchorDB model names:
+// - %APPDATA%\knlview\models.json on Windows
+// - ~/.knlview/models.json on Linux and macOS
 //
 // Model names may be random; what makes a random name meaningful is this
 // registry: the mapping of name → project, role, and project location.
@@ -11,8 +15,8 @@ import crypto from 'node:crypto'
 
 const REGISTRY_FILE = 'models.json'
 
-export function modelRegistryPath(home = process.env.HOME) {
-  return path.join(home || '', '.knlview', REGISTRY_FILE)
+export function modelRegistryPath(home = null, options = {}) {
+  return path.join(knlGlobalDir(home, options), REGISTRY_FILE)
 }
 
 /**
@@ -31,9 +35,31 @@ export function generateModelName() {
  * Read the registry. Missing/broken file = empty registry, not an error.
  * @returns {Promise<{models: object, error: string|null}>}
  */
-export async function readModelRegistry(home = process.env.HOME) {
+export async function readModelRegistry(home = null, options = {}) {
+  const primary = modelRegistryPath(home, options)
+  let content = null
   try {
-    const parsed = JSON.parse(await fs.readFile(modelRegistryPath(home), 'utf8'))
+    content = await fs.readFile(primary, 'utf8')
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      const platform = options.platform || process.platform
+      const env = options.env || process.env
+      if (platform === 'win32' && !home) {
+        const winHome = env.USERPROFILE || env.HOME || (typeof os.homedir === 'function' ? os.homedir() : null)
+        if (winHome) {
+          try {
+            content = await fs.readFile(path.join(winHome, '.knlview', REGISTRY_FILE), 'utf8')
+          } catch {}
+        }
+      }
+      if (!content) return { models: {}, error: null }
+    } else {
+      return { models: {}, error: err.message }
+    }
+  }
+
+  try {
+    const parsed = JSON.parse(content)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { models: {}, error: 'registry contents are not an object' }
     }
@@ -45,7 +71,6 @@ export async function readModelRegistry(home = process.env.HOME) {
     }
     return { models, error: null }
   } catch (err) {
-    if (err?.code === 'ENOENT') return { models: {}, error: null }
     return { models: {}, error: err.message }
   }
 }
@@ -56,8 +81,8 @@ export async function readModelRegistry(home = process.env.HOME) {
  * whether to warn.
  * @returns {Promise<{previous: object|null, written: boolean, error: string|null}>}
  */
-export async function registerModel(name, { role, project, cwd }, home = process.env.HOME) {
-  const { models, error } = await readModelRegistry(home)
+export async function registerModel(name, { role, project, cwd }, home = null, options = {}) {
+  const { models, error } = await readModelRegistry(home, options)
   if (error) return { previous: null, written: false, error }
 
   const previous = models[name] || null
@@ -74,7 +99,7 @@ export async function registerModel(name, { role, project, cwd }, home = process
   }
 
   try {
-    const file = modelRegistryPath(home)
+    const file = modelRegistryPath(home, options)
     await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(file, JSON.stringify(models, null, 2) + '\n', 'utf8')
     return { previous: null, written: true, error: null }

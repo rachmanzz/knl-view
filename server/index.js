@@ -1,6 +1,5 @@
 import http from 'node:http'
-import { promises as fs } from 'node:fs'
-import { createReadStream } from 'node:fs'
+import { promises as fs, createReadStream } from 'node:fs'
 import path from 'node:path'
 import { readMap, normalizeMap, decorateNode } from './map.js'
 import { buildGraphFromRoot } from './graph/parser.js'
@@ -13,7 +12,7 @@ import {
   inboundConsensus,
   outboundConsensus
 } from './consensus.js'
-import { anchordbClientOptions, syncStatePath, DEFAULT_RELATIONS } from './config.js'
+import { anchordbClientOptions, syncStatePath, DEFAULT_RELATIONS, createPathMatcher } from './config.js'
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -43,7 +42,7 @@ const MD_EXTS = new Set(['md', 'markdown', 'prd'])
 const MAX_DOC_BYTES = 8 * 1024 * 1024
 const TITLE_READ_BYTES = 8192
 
-export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085, anchordb = null, consensusModel = null, sourcesModel = null }) {
+export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085, anchordb = null, consensusModel = null, sourcesModel = null, include = null, exclude = null }) {
   const rootAbs = path.resolve(root)
   const distAbs = dist ? path.resolve(dist) : null
   // Live AnchorDB connection status lives here, not a snapshot: attachAnchorDB
@@ -63,7 +62,7 @@ export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', p
   }
 
   const server = http.createServer((req, res) => {
-    route(req, res, rootAbs, distAbs, { host, port, anchordb: anchordbState }).catch((err) => {
+    route(req, res, rootAbs, distAbs, { host, port, anchordb: anchordbState, include, exclude }).catch((err) => {
       if (!res.headersSent) sendJson(res, 500, { error: `Failed to handle request: ${err.message}` })
       else res.end()
     })
@@ -184,11 +183,16 @@ async function writeSyncState(model, edges) {
 }
 
 async function route(req, res, rootAbs, distAbs, listen) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.setHeader('Allow', 'GET, HEAD')
+    return sendJson(res, 405, { error: 'Only GET is supported.' })
+  }
+
   const url = new URL(req.url, 'http://localhost')
   const pathname = url.pathname
 
   if (pathname === '/api/meta') return sendJson(res, 200, await buildMeta(rootAbs, listen))
-  if (pathname === '/api/tree') return sendJson(res, 200, await buildTree(rootAbs, '', await loadMapNorm(rootAbs)))
+  if (pathname === '/api/tree') return sendJson(res, 200, await buildTree(rootAbs, '', await loadMapNorm(rootAbs), listen))
   if (pathname === '/api/doc') return sendDoc(res, rootAbs, url)
   if (pathname === '/api/raw') return sendRaw(res, rootAbs, url)
   if (pathname === '/api/graph') {
@@ -200,14 +204,15 @@ async function route(req, res, rootAbs, distAbs, listen) {
     if (!target) {
       return sendJson(res, 400, { error: 'Parameter "target" or "id" is required.' })
     }
-    const hops = parseInt(url.searchParams.get('hops') || '2', 10)
+    const rawHops = parseInt(url.searchParams.get('hops') || '2', 10)
+    const hops = Math.min(Math.max(1, Number.isInteger(rawHops) ? rawHops : 2), 10)
     const rawDirection = url.searchParams.get('direction')
     if (rawDirection !== null && !['in', 'out', 'both'].includes(rawDirection)) {
       return sendJson(res, 400, { error: 'Parameter "direction" must be in, out, or both.' })
     }
     const direction = rawDirection || 'both'
     const graph = await buildGraphFromRoot(rootAbs)
-    const subGraph = graph.extractSubGraph(target, Number.isInteger(hops) && hops > 0 ? hops : 2, direction)
+    const subGraph = graph.extractSubGraph(target, hops, direction)
     return sendJson(res, 200, subGraph)
   }
   if (pathname === '/api/anchordb/trace') {
@@ -221,11 +226,6 @@ async function route(req, res, rootAbs, distAbs, listen) {
   }
   if (pathname.startsWith('/api/')) {
     return sendJson(res, 404, { error: `Unknown endpoint: ${pathname}` })
-  }
-
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    res.setHeader('Allow', 'GET, HEAD')
-    return sendJson(res, 405, { error: 'Only GET is supported.' })
   }
 
   return sendStatic(req, res, distAbs, pathname)
@@ -251,8 +251,10 @@ async function handleAnchorTrace(res, state, url) {
   const relations = url.searchParams.get('relations')
     ? url.searchParams.get('relations').split(',').map((s) => s.trim()).filter(Boolean)
     : (state.config.relations?.length ? state.config.relations : DEFAULT_RELATIONS)
-  const limit = parseInt(url.searchParams.get('limit') || '20', 10)
-  const hops = parseInt(url.searchParams.get('hops') || '2', 10)
+  const rawLimit = parseInt(url.searchParams.get('limit') || '20', 10)
+  const limit = Math.min(Math.max(1, Number.isInteger(rawLimit) ? rawLimit : 20), 100)
+  const rawHops = parseInt(url.searchParams.get('hops') || '2', 10)
+  const hops = Math.min(Math.max(1, Number.isInteger(rawHops) ? rawHops : 2), 10)
   const rawDirection = url.searchParams.get('direction')
   if (rawDirection !== null && !['in', 'out', 'both'].includes(rawDirection)) {
     return sendJson(res, 400, { error: 'Parameter "direction" must be in, out, or both.' })
@@ -386,7 +388,7 @@ async function handleSourcesTrace(res, state, url) {
     direction = rawDirection
   }
   const hops = Number.parseInt(url.searchParams.get('hops') || '2', 10)
-  const maxHops = Number.isInteger(hops) && hops > 0 ? hops : 2
+  const maxHops = Math.min(Math.max(1, Number.isInteger(hops) ? hops : 2), 10)
   try {
     const { out, in: inc } = await traceSources(state.sourcesClient, target, direction, maxHops)
     return sendJson(res, 200, {
@@ -401,23 +403,35 @@ async function handleSourcesTrace(res, state, url) {
   }
 }
 
-function safeJoin(base, relPath) {
-  if (!relPath) return null
-  let decoded
+async function safeJoin(base, relPath) {
+  if (!relPath || typeof relPath !== 'string') return null
+  if (relPath.includes('\0')) return null
+  const abs = path.resolve(base, relPath)
+  if (abs !== base && !abs.startsWith(base + path.sep)) return null
+
   try {
-    decoded = decodeURIComponent(relPath)
-  } catch {
+    const realBase = await fs.realpath(base)
+    const realAbs = await fs.realpath(abs)
+    if (realAbs !== realBase && !realAbs.startsWith(realBase + path.sep)) return null
+    return realAbs
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      try {
+        const realParent = await fs.realpath(path.dirname(abs))
+        const realBase = await fs.realpath(base)
+        if (realParent !== realBase && !realParent.startsWith(realBase + path.sep)) return null
+        return abs
+      } catch {
+        return null
+      }
+    }
     return null
   }
-  if (decoded.includes('\0')) return null
-  const abs = path.resolve(base, decoded)
-  if (abs !== base && !abs.startsWith(base + path.sep)) return null
-  return abs
 }
 
 async function buildMeta(rootAbs, listen = {}) {
   const norm = await loadMapNorm(rootAbs)
-  const tree = await buildTree(rootAbs, '', norm)
+  const tree = await buildTree(rootAbs, '', norm, listen)
   const counts = { files: 0, dirs: 0, newest: 0 }
   walkStats(tree, counts)
   const host = listen.host || '127.0.0.1'
@@ -453,7 +467,9 @@ function walkStats(nodes, acc) {
   }
 }
 
-async function buildTree(dirAbs, rel, norm) {
+async function buildTree(dirAbs, rel, norm, options = {}) {
+  const excludeFilter = options.exclude ? createPathMatcher(options.exclude) : null
+  const includeFilter = options.include ? createPathMatcher(options.include) : null
   const entries = await fs.readdir(dirAbs, { withFileTypes: true })
   const nodes = []
 
@@ -464,37 +480,52 @@ async function buildTree(dirAbs, rel, norm) {
     // The map may hide entries (`ignore`). A hidden folder hides its whole
     // contents with it: never walk into it at all.
     if (norm?.entries?.get(childRel)?.ignore) continue
+
+    // 1. Hard exclude: knl-config exclude is truly excluded, always wins
+    if (excludeFilter && excludeFilter.matches(childRel, entry.name)) continue
+
+    // 2. Explicit include: if includeFilter is set, only included items or parent dirs are allowed
+    if (includeFilter) {
+      const isExplicitlyIncluded = includeFilter.matches(childRel, entry.name)
+      const isDirPrefixOfInclude = entry.isDirectory() && includeFilter.isPrefixOfAny(childRel)
+      if (!isExplicitlyIncluded && !isDirPrefixOfInclude) continue
+    }
+
     const childAbs = path.join(dirAbs, entry.name)
 
-    if (entry.isDirectory()) {
+    try {
+      if (entry.isDirectory()) {
+        const stat = await fs.stat(childAbs)
+        const node = {
+          name: entry.name,
+          path: childRel,
+          type: 'dir',
+          mtime: stat.mtimeMs,
+          children: await buildTree(childAbs, childRel, norm, options)
+        }
+        nodes.push(decorateNode(node, norm))
+        continue
+      }
+      if (!entry.isFile()) continue
+
       const stat = await fs.stat(childAbs)
+      const ext = path.extname(entry.name).slice(1).toLowerCase()
       const node = {
         name: entry.name,
         path: childRel,
-        type: 'dir',
-        mtime: stat.mtimeMs,
-        children: await buildTree(childAbs, childRel, norm)
+        type: 'file',
+        ext,
+        size: stat.size,
+        mtime: stat.mtimeMs
+      }
+      if (MD_EXTS.has(ext)) {
+        const title = await readFirstHeading(childAbs, stat.size)
+        if (title) node.title = title
       }
       nodes.push(decorateNode(node, norm))
-      continue
+    } catch {
+      // Skip unreadable or concurrently deleted entries
     }
-    if (!entry.isFile()) continue
-
-    const stat = await fs.stat(childAbs)
-    const ext = path.extname(entry.name).slice(1).toLowerCase()
-    const node = {
-      name: entry.name,
-      path: childRel,
-      type: 'file',
-      ext,
-      size: stat.size,
-      mtime: stat.mtimeMs
-    }
-    if (MD_EXTS.has(ext)) {
-      const title = await readFirstHeading(childAbs, stat.size)
-      if (title) node.title = title
-    }
-    nodes.push(decorateNode(node, norm))
   }
 
   // One sort rule, same as orderForIndex in the views: documents first, then
@@ -505,15 +536,16 @@ async function buildTree(dirAbs, rel, norm) {
     const bo = b.order ?? Number.POSITIVE_INFINITY
     if (ao !== bo) return ao - bo
     if (a.type !== b.type) return a.type === 'file' ? -1 : 1
-    return a.name.localeCompare(b.name, 'id', { numeric: true, sensitivity: 'base' })
+    return a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' })
   })
   return nodes
 }
 
 async function readFirstHeading(abs, size) {
   if (size === 0 || size > 512 * 1024) return null
-  const handle = await fs.open(abs, 'r')
+  let handle
   try {
+    handle = await fs.open(abs, 'r')
     const buffer = Buffer.alloc(TITLE_READ_BYTES)
     const { bytesRead } = await handle.read(buffer, 0, TITLE_READ_BYTES, 0)
     const text = buffer.subarray(0, bytesRead).toString('utf8')
@@ -521,8 +553,10 @@ async function readFirstHeading(abs, size) {
     if (!match) return null
     const title = cleanTitle(match[1])
     return title || null
+  } catch {
+    return null
   } finally {
-    await handle.close()
+    if (handle) await handle.close()
   }
 }
 
@@ -542,7 +576,7 @@ async function sendDoc(res, rootAbs, url) {
   const rel = url.searchParams.get('path')
   if (!rel) return sendJson(res, 400, { error: 'Parameter path is required.' })
 
-  const abs = safeJoin(rootAbs, rel)
+  const abs = await safeJoin(rootAbs, rel)
   if (!abs) return sendJson(res, 400, { error: `Path outside the knowledge base: ${rel}` })
 
   let stat
@@ -571,7 +605,7 @@ async function sendRaw(res, rootAbs, url) {
   const rel = url.searchParams.get('path')
   if (!rel) return sendJson(res, 400, { error: 'Parameter path is required.' })
 
-  const abs = safeJoin(rootAbs, rel)
+  const abs = await safeJoin(rootAbs, rel)
   if (!abs) return sendJson(res, 400, { error: `Path outside the knowledge base: ${rel}` })
 
   let stat
@@ -583,11 +617,23 @@ async function sendRaw(res, rootAbs, url) {
   if (!stat.isFile()) return sendJson(res, 400, { error: `Not a file: ${rel}` })
 
   const type = MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream'
-  res.writeHead(200, { 'Content-Type': type, 'Content-Length': stat.size, 'Cache-Control': 'no-store' })
+  res.writeHead(200, {
+    'Content-Type': type,
+    'Content-Length': stat.size,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN'
+  })
   if (res.req.method === 'HEAD') return res.end()
   return new Promise((resolve, reject) => {
     const stream = createReadStream(abs)
-    stream.on('error', reject)
+    stream.on('error', (err) => {
+      res.destroy(err)
+      reject(err)
+    })
+    res.on('close', () => {
+      stream.destroy()
+    })
     stream.on('end', resolve)
     stream.pipe(res)
   })
@@ -600,10 +646,17 @@ async function sendStatic(req, res, distAbs, pathname) {
     return
   }
 
-  let rel = decodeURIComponent(pathname)
+  let rel
+  try {
+    rel = decodeURIComponent(pathname)
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+    res.end('Bad Request: Malformed URI path.')
+    return
+  }
   if (rel.endsWith('/')) rel += 'index.html'
 
-  let abs = safeJoin(distAbs, rel.replace(/^\/+/, ''))
+  let abs = await safeJoin(distAbs, rel.replace(/^\/+/, ''))
   if (!abs) {
     res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
     res.end('Access denied.')
@@ -636,12 +689,20 @@ async function sendStatic(req, res, distAbs, pathname) {
   res.writeHead(200, {
     'Content-Type': MIME[ext] || 'application/octet-stream',
     'Content-Length': stat.size,
-    'Cache-Control': cache
+    'Cache-Control': cache,
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN'
   })
   if (req.method === 'HEAD') return res.end()
   return new Promise((resolve, reject) => {
     const stream = createReadStream(abs)
-    stream.on('error', reject)
+    stream.on('error', (err) => {
+      res.destroy(err)
+      reject(err)
+    })
+    res.on('close', () => {
+      stream.destroy()
+    })
     stream.on('end', resolve)
     stream.pipe(res)
   })
@@ -660,7 +721,9 @@ function sendJson(res, status, body) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
-    'Cache-Control': 'no-store'
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN'
   })
   res.end(payload)
 }

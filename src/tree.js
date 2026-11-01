@@ -55,7 +55,7 @@ export function findReadme(node) {
   return findRootReadme(node.children)
 }
 
-const byName = (a, b) => a.name.localeCompare(b.name, 'id', { numeric: true, sensitivity: 'base' })
+const byName = (a, b) => a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' })
 
 // One sort rule for all index lists: documents first, then folders.
 // When the map sets `order`, ordered entries come first (ascending); the rest
@@ -65,13 +65,13 @@ export function orderForIndex(nodes) {
   const withOrder = nodes.filter((n) => n.order != null)
   const withoutOrder = nodes.filter((n) => n.order == null)
 
-  const byPeta = [...withOrder].sort((a, b) => {
+  const byMap = [...withOrder].sort((a, b) => {
     if (a.order !== b.order) return a.order - b.order
     if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
     return byName(a, b)
   })
 
-  return [...byPeta, ...withoutOrder.filter((n) => n.type === 'file').sort(byName), ...withoutOrder.filter((n) => n.type === 'dir').sort(byName)]
+  return [...byMap, ...withoutOrder.filter((n) => n.type === 'file').sort(byName), ...withoutOrder.filter((n) => n.type === 'dir').sort(byName)]
 }
 
 export function countFilesRecursive(node) {

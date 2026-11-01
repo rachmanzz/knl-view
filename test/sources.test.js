@@ -9,7 +9,6 @@ import {
   resolveJsSpecifiers,
   resolveGoSpecifiers,
   goModulePath,
-  resolveCallTargets,
   buildSourcesGraph,
   desiredSourceEdgeKeys,
   labelContent,
@@ -18,8 +17,7 @@ import {
   traceSources,
   collectorHttpUrl,
   purgeArchivedRecords,
-  SOURCE_RELATIONS,
-  SYMBOL_RELATIONS
+  SOURCE_RELATIONS
 } from '../server/graph/sources.js'
 import { extractCode } from '../server/graph/syntax.js'
 import { edgeKey } from '../server/graph/anchordb_client.js'
@@ -873,6 +871,86 @@ describe('collector helpers', () => {
       )
     } finally {
       globalThis.fetch = originalFetch
+    }
+  })
+
+  test('writeLabelFiles throws when labelDir escapes root', async () => {
+    const root = makeRepo()
+    try {
+      await assert.rejects(
+        () => writeLabelFiles(root, '../../escaped', new Map()),
+        /resolves outside the project root/
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scanSourceFiles handles special regex characters in .gitignore without crash', async () => {
+    const root = makeRepo()
+    try {
+      write(root, '.gitignore', '*(special)[unclosed*\n*.temp\n')
+      write(root, 'main.js', 'console.log(1)')
+      write(root, 'foo.temp', 'temp')
+      const files = await scanSourceFiles(root)
+      assert.ok('main.js' in files)
+      assert.ok(!('foo.temp' in files))
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scanSourceFiles respects custom exclude (truly excludes)', async () => {
+    const root = makeRepo()
+    try {
+      write(root, 'src/main.js', 'console.log(1)')
+      write(root, 'src/legacy/old.js', 'console.log(2)')
+      write(root, 'tests/main.test.js', 'test()')
+      const files = await scanSourceFiles(root, { exclude: ['src/legacy', '*.test.js'] })
+      assert.ok('src/main.js' in files)
+      assert.ok(!('src/legacy/old.js' in files))
+      assert.ok(!('tests/main.test.js' in files))
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scanSourceFiles allows including files from default-ignored directories', async () => {
+    const root = makeRepo()
+    try {
+      write(root, 'src/main.js', 'console.log(1)')
+      write(root, 'dist/bundle.js', 'console.log(2)')
+      write(root, 'dist/chunk.js', 'console.log(3)')
+      write(root, '.hidden/tool.js', 'console.log(4)')
+      const files = await scanSourceFiles(root, {
+        include: ['src/**', 'dist/bundle.js', '.hidden/**']
+      })
+      assert.ok('src/main.js' in files)
+      assert.ok('dist/bundle.js' in files)
+      assert.ok(!('dist/chunk.js' in files))
+      assert.ok('.hidden/tool.js' in files)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('exclude takes precedence over include (truly excludes)', async () => {
+    const root = makeRepo()
+    try {
+      write(root, 'src/allowed.js', 'console.log(1)')
+      write(root, 'src/secret.js', 'console.log(2)')
+      write(root, 'dist/bundle.js', 'console.log(3)')
+      write(root, 'dist/bundle.test.js', 'console.log(4)')
+      const files = await scanSourceFiles(root, {
+        include: ['src/**', 'dist/**'],
+        exclude: ['src/secret.js', '*.test.js']
+      })
+      assert.ok('src/allowed.js' in files)
+      assert.ok(!('src/secret.js' in files))
+      assert.ok('dist/bundle.js' in files)
+      assert.ok(!('dist/bundle.test.js' in files))
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
     }
   })
 })
