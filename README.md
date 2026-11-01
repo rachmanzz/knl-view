@@ -398,7 +398,7 @@ Each file also defines **symbol nodes**, extracted from the same parse:
   per source file that has symbols; override the location with `labelDir`
   in the project config. Labels are regenerated and pruned on every sync.
 
-#### Supported Languages (v0.2.0)
+#### Supported Languages (v0.3.0)
 
 Tree-sitter WASM grammars run in-memory within Node.js without requiring host compilers:
 
