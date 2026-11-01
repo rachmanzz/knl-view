@@ -125,7 +125,7 @@ describe('buildModuleGraph and syncModuleToAnchorDB', () => {
 
       const catalog = await readModulesCatalog('npm', { home })
       assert.ok(catalog['my-pkg@1.2.3'])
-      assert.deepEqual(catalog['my-pkg@1.2.3'].symbols, ['helper', 'start'])
+      assert.equal(catalog['my-pkg@1.2.3'].symbolCount, 2)
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
       fs.rmSync(home, { recursive: true, force: true })

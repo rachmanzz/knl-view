@@ -13,7 +13,9 @@ import {
   updateModulesCatalog,
   isModuleSynced,
   detectProjectManifests,
-  resolveModuleLocation
+  resolveModuleLocation,
+  isValidModuleName,
+  SUPPORTED_ECOSYSTEMS
 } from '../server/graph/modules_catalog.js'
 
 function makeTempDir() {
@@ -31,6 +33,7 @@ describe('modulesCatalogDir and formatters', () => {
     assert.equal(defaultEcosystemModel('cargo'), 'modules-cargo')
     assert.equal(defaultEcosystemModel('go'), 'modules-go')
     assert.equal(defaultEcosystemModel('pypi'), 'modules-pypi')
+    assert.deepEqual([...SUPPORTED_ECOSYSTEMS].sort(), ['cargo', 'go', 'npm', 'pypi'])
   })
 
   test('formatters construct standard ids', () => {
@@ -51,7 +54,7 @@ describe('catalog read and update', () => {
     }
   })
 
-  test('updateModulesCatalog records modules and merges symbols', async () => {
+  test('updateModulesCatalog records modules and records symbolCount', async () => {
     const home = makeTempDir()
     try {
       await updateModulesCatalog('npm', {
@@ -68,23 +71,23 @@ describe('catalog read and update', () => {
       assert.equal(first['express@4.19.2'].version, '4.19.2')
       assert.equal(first['express@4.19.2'].model, 'modules-npm')
       assert.equal(first['express@4.19.2'].nodeId, 'ext:npm/express@4.19.2')
-      assert.deepEqual(first['express@4.19.2'].symbols, ['Router', 'json'])
+      assert.equal(first['express@4.19.2'].symbolCount, 2)
       assert.ok(typeof first['express@4.19.2'].syncedAt === 'number')
 
       assert.equal(await isModuleSynced('npm', 'express', '4.19.2', { home }), true)
       assert.equal(await isModuleSynced('npm', 'express', '5.0.0', { home }), false)
 
-      // Merge new symbol into existing entry
+      // Update symbol count
       await updateModulesCatalog('npm', {
         'express@4.19.2': {
           name: 'express',
           version: '4.19.2',
-          symbols: ['static']
+          symbolCount: 5
         }
       }, { home })
 
       const second = await readModulesCatalog('npm', { home })
-      assert.deepEqual(second['express@4.19.2'].symbols, ['Router', 'json', 'static'])
+      assert.equal(second['express@4.19.2'].symbolCount, 5)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }
@@ -198,5 +201,37 @@ describe('resolveModuleLocation', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  test('security: rejects path traversal and invalid module names', async () => {
+    assert.equal(isValidModuleName('../secret'), false)
+    assert.equal(isValidModuleName('../../etc/passwd'), false)
+    assert.equal(isValidModuleName('pkg/../../../etc'), false)
+    assert.equal(isValidModuleName('bad\0name'), false)
+    assert.equal(isValidModuleName('/absolute/path'), false)
+    assert.equal(isValidModuleName('.'), false)
+    assert.equal(isValidModuleName('..'), false)
+    assert.equal(isValidModuleName('express'), true)
+    assert.equal(isValidModuleName('@scope/pkg'), true)
+    assert.equal(isValidModuleName('github.com/gin-gonic/gin'), true)
+
+    const root = makeTempDir()
+    try {
+      // Path traversal should return null immediately
+      const resolved = await resolveModuleLocation('npm', '../../../../etc', { projectRoot: root })
+      assert.equal(resolved, null)
+
+      // Unsupported ecosystem returns null
+      const unsupp = await resolveModuleLocation('malicious', 'express', { projectRoot: root })
+      assert.equal(unsupp, null)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('security: readModulesCatalog rejects unsupported ecosystem', async () => {
+    const res = await readModulesCatalog('../knl-config')
+    assert.deepEqual(res, {})
+    assert.throws(() => defaultEcosystemModel('invalid_eco'), /Unsupported ecosystem/)
   })
 })

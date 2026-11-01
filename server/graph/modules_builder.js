@@ -8,7 +8,9 @@ import {
   formatExternalPackageNodeId,
   formatExternalSymbolNodeId,
   defaultEcosystemModel,
-  updateModulesCatalog
+  updateModulesCatalog,
+  SUPPORTED_ECOSYSTEMS,
+  isValidModuleName
 } from './modules_catalog.js'
 
 const MODULE_DEFAULT_IGNORES = [
@@ -27,11 +29,14 @@ const MODULE_DEFAULT_IGNORES = [
 ]
 
 /**
- * Scan source files of an external module directory.
+ * Scan source files of an external module directory with depth and file count guard-rails.
  */
-export async function scanModuleFiles(moduleDir, ecosystem) {
+export async function scanModuleFiles(moduleDir, ecosystem, { maxDepth = 20, maxFiles = 5000 } = {}) {
   const files = {}
-  const walk = async (dirAbs, rel) => {
+  let totalFiles = 0
+
+  const walk = async (dirAbs, rel, depth = 0) => {
+    if (depth > maxDepth || totalFiles >= maxFiles) return
     let entries
     try {
       entries = await fs.readdir(dirAbs, { withFileTypes: true })
@@ -39,10 +44,11 @@ export async function scanModuleFiles(moduleDir, ecosystem) {
       return
     }
     for (const entry of entries) {
+      if (totalFiles >= maxFiles) break
       const childRel = rel ? `${rel}/${entry.name}` : entry.name
       if (entry.isDirectory()) {
         if (MODULE_DEFAULT_IGNORES.includes(entry.name.toLowerCase())) continue
-        await walk(path.join(dirAbs, entry.name), childRel)
+        await walk(path.join(dirAbs, entry.name), childRel, depth + 1)
         continue
       }
       if (!entry.isFile()) continue
@@ -51,14 +57,16 @@ export async function scanModuleFiles(moduleDir, ecosystem) {
       if (ecosystem === 'go' && entry.name.endsWith('_test.go')) continue
       if (ecosystem === 'pypi' && entry.name.startsWith('test_')) continue
       files[childRel] = path.join(dirAbs, entry.name)
+      totalFiles += 1
     }
   }
-  await walk(moduleDir, '')
+  await walk(moduleDir, '', 0)
   return files
 }
 
 /**
  * Parse an eco::name string into components: { ecosystem, moduleName }
+ * Strictly validates ecosystem against SUPPORTED_ECOSYSTEMS and moduleName against path traversal.
  */
 export function parseModuleSpecifier(target) {
   if (!target || typeof target !== 'string') return null
@@ -66,7 +74,9 @@ export function parseModuleSpecifier(target) {
   if (idx <= 0) return null
   const ecosystem = target.slice(0, idx).toLowerCase()
   const moduleName = target.slice(idx + 2)
-  if (!moduleName) return null
+  if (!moduleName || !SUPPORTED_ECOSYSTEMS.has(ecosystem) || !isValidModuleName(moduleName)) {
+    return null
+  }
   return { ecosystem, moduleName }
 }
 
@@ -233,7 +243,7 @@ export async function syncModuleToAnchorDB(client, moduleGraph, options = {}) {
       ecosystem: moduleGraph.ecosystem,
       model: moduleGraph.model,
       nodeId: moduleGraph.moduleNode.id,
-      symbols: moduleGraph.symbols
+      symbolCount: moduleGraph.symbols.length
     }
   }, options)
 

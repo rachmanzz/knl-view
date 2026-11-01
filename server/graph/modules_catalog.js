@@ -2,6 +2,21 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { knlGlobalDir } from '../config.js'
 
+export const SUPPORTED_ECOSYSTEMS = new Set(['npm', 'go', 'cargo', 'pypi'])
+
+/**
+ * Validate that a module name does not contain traversal tokens, null bytes, or invalid paths.
+ */
+export function isValidModuleName(name) {
+  if (!name || typeof name !== 'string') return false
+  if (name.includes('\0')) return false
+  const segments = name.replace(/\\/g, '/').split('/')
+  for (const seg of segments) {
+    if (seg === '.' || seg === '..' || !seg) return false
+  }
+  return true
+}
+
 /**
  * Returns the path to the global modules catalog directory (~/.knlview/modules).
  */
@@ -14,7 +29,11 @@ export function modulesCatalogDir(home = null, options = {}) {
  * Default global AnchorDB model name for an ecosystem.
  */
 export function defaultEcosystemModel(ecosystem) {
-  return `modules-${ecosystem}`
+  const eco = String(ecosystem || '').toLowerCase()
+  if (!SUPPORTED_ECOSYSTEMS.has(eco)) {
+    throw new Error(`Unsupported ecosystem "${ecosystem}". Supported: ${[...SUPPORTED_ECOSYSTEMS].join(', ')}`)
+  }
+  return `modules-${eco}`
 }
 
 export function formatModuleKey(pkgName, version) {
@@ -33,8 +52,10 @@ export function formatExternalSymbolNodeId(ecosystem, pkgName, version, symbol) 
  * Read the catalog for a specific ecosystem ('npm', 'go', 'cargo', 'pypi').
  */
 export async function readModulesCatalog(ecosystem, options = {}) {
+  const eco = String(ecosystem || '').toLowerCase()
+  if (!SUPPORTED_ECOSYSTEMS.has(eco)) return {}
   const dir = modulesCatalogDir(options.home, options)
-  const file = path.join(dir, `${ecosystem}.json`)
+  const file = path.join(dir, `${eco}.json`)
   try {
     const raw = await fs.readFile(file, 'utf8')
     const parsed = JSON.parse(raw)
@@ -55,31 +76,32 @@ export async function isModuleSynced(ecosystem, pkgName, version, options = {}) 
 
 /**
  * Record discovered modules and symbols to ~/.knlview/modules/<ecosystem>.json.
+ * Stores lightweight metadata and symbolCount to avoid bloat in the local JSON catalog.
  */
 export async function updateModulesCatalog(ecosystem, entries, options = {}) {
+  const eco = String(ecosystem || '').toLowerCase()
+  if (!SUPPORTED_ECOSYSTEMS.has(eco)) return
   if (!entries || !Object.keys(entries).length) return
   const dir = modulesCatalogDir(options.home, options)
-  const file = path.join(dir, `${ecosystem}.json`)
+  const file = path.join(dir, `${eco}.json`)
   try {
     await fs.mkdir(dir, { recursive: true })
-    const existing = await readModulesCatalog(ecosystem, options)
+    const existing = await readModulesCatalog(eco, options)
     for (const [key, item] of Object.entries(entries)) {
-      const prev = existing[key] || {
-        name: item.name,
-        version: item.version,
-        ecosystem,
-        model: item.model || defaultEcosystemModel(ecosystem),
-        nodeId: item.nodeId || formatExternalPackageNodeId(ecosystem, item.name, item.version),
-        symbols: []
-      }
-      const symSet = new Set([...(prev.symbols || []), ...(item.symbols || [])])
+      const prev = existing[key] || {}
+      const symbolCount = item.symbolCount !== undefined
+        ? item.symbolCount
+        : Array.isArray(item.symbols)
+          ? item.symbols.length
+          : (prev.symbolCount || 0)
+
       existing[key] = {
         name: item.name,
         version: item.version,
-        ecosystem,
-        model: item.model || prev.model || defaultEcosystemModel(ecosystem),
-        nodeId: item.nodeId || prev.nodeId || formatExternalPackageNodeId(ecosystem, item.name, item.version),
-        symbols: [...symSet].sort(),
+        ecosystem: eco,
+        model: item.model || prev.model || defaultEcosystemModel(eco),
+        nodeId: item.nodeId || prev.nodeId || formatExternalPackageNodeId(eco, item.name, item.version),
+        symbolCount,
         syncedAt: item.syncedAt || prev.syncedAt || Date.now()
       }
     }
@@ -183,22 +205,27 @@ export async function detectProjectManifests(rootAbs) {
  * and Python (venv site-packages).
  */
 export async function resolveModuleLocation(ecosystem, moduleName, options = {}) {
+  const eco = String(ecosystem || '').toLowerCase()
+  if (!SUPPORTED_ECOSYSTEMS.has(eco) || !isValidModuleName(moduleName)) return null
   const root = path.resolve(options.projectRoot || process.cwd())
   const manifests = options.manifests || await detectProjectManifests(root)
 
-  if (ecosystem === 'npm') {
+  if (eco === 'npm') {
     // 1. Check node_modules in projectRoot and walk up if necessary
     let curr = root
     let foundDir = null
     while (true) {
-      const candidate = path.join(curr, 'node_modules', moduleName)
-      try {
-        const stat = await fs.stat(candidate)
-        if (stat.isDirectory()) {
-          foundDir = candidate
-          break
-        }
-      } catch {}
+      const baseModules = path.join(curr, 'node_modules')
+      const candidate = path.resolve(baseModules, moduleName)
+      if (candidate.startsWith(baseModules + path.sep)) {
+        try {
+          const stat = await fs.stat(candidate)
+          if (stat.isDirectory()) {
+            foundDir = candidate
+            break
+          }
+        } catch {}
+      }
       const parent = path.dirname(curr)
       if (parent === curr) break
       curr = parent
@@ -211,39 +238,48 @@ export async function resolveModuleLocation(ecosystem, moduleName, options = {})
         const pkg = JSON.parse(pkgText)
         if (pkg.version) version = pkg.version
       } catch {}
-      return { location: foundDir, version, name: moduleName, ecosystem }
+      return { location: foundDir, version, name: moduleName, ecosystem: eco }
     }
-  } else if (ecosystem === 'go') {
+  } else if (eco === 'go') {
     // 1. Check local vendor
-    const vendorDir = path.join(root, 'vendor', moduleName)
-    try {
-      const stat = await fs.stat(vendorDir)
-      if (stat.isDirectory()) {
-        return { location: vendorDir, version: manifests.go[moduleName] || 'vendor', name: moduleName, ecosystem }
-      }
-    } catch {}
+    const vendorBase = path.join(root, 'vendor')
+    const vendorDir = path.resolve(vendorBase, moduleName)
+    if (vendorDir.startsWith(vendorBase + path.sep)) {
+      try {
+        const stat = await fs.stat(vendorDir)
+        if (stat.isDirectory()) {
+          return { location: vendorDir, version: manifests.go[moduleName] || 'vendor', name: moduleName, ecosystem: eco }
+        }
+      } catch {}
+    }
 
     // 2. Check GOPATH
     const gopath = process.env.GOPATH || path.join(options.home || process.env.HOME || '', 'go')
     const version = manifests.go[moduleName]
     if (version) {
-      const modDir = path.join(gopath, 'pkg', 'mod', `${moduleName}@${version}`)
+      const modBase = path.join(gopath, 'pkg', 'mod')
+      const modDir = path.resolve(modBase, `${moduleName}@${version}`)
+      if (modDir.startsWith(modBase + path.sep)) {
+        try {
+          const stat = await fs.stat(modDir)
+          if (stat.isDirectory()) {
+            return { location: modDir, version, name: moduleName, ecosystem: eco }
+          }
+        } catch {}
+      }
+    }
+  } else if (eco === 'cargo') {
+    // 1. Check local vendor
+    const vendorBase = path.join(root, 'vendor')
+    const vendorDir = path.resolve(vendorBase, moduleName)
+    if (vendorDir.startsWith(vendorBase + path.sep)) {
       try {
-        const stat = await fs.stat(modDir)
+        const stat = await fs.stat(vendorDir)
         if (stat.isDirectory()) {
-          return { location: modDir, version, name: moduleName, ecosystem }
+          return { location: vendorDir, version: manifests.cargo[moduleName] || 'vendor', name: moduleName, ecosystem: eco }
         }
       } catch {}
     }
-  } else if (ecosystem === 'cargo') {
-    // 1. Check local vendor
-    const vendorDir = path.join(root, 'vendor', moduleName)
-    try {
-      const stat = await fs.stat(vendorDir)
-      if (stat.isDirectory()) {
-        return { location: vendorDir, version: manifests.cargo[moduleName] || 'vendor', name: moduleName, ecosystem }
-      }
-    } catch {}
 
     // 2. Check cargo registry cache (~/.cargo/registry/src)
     const cargoHome = process.env.CARGO_HOME || path.join(options.home || process.env.HOME || '', '.cargo')
@@ -257,13 +293,15 @@ export async function resolveModuleLocation(ecosystem, moduleName, options = {})
         const entries = await fs.readdir(regDir)
         const match = entries.find((e) => version ? e === targetPrefix : e.startsWith(targetPrefix))
         if (match) {
-          const location = path.join(regDir, match)
-          const matchedVersion = version || match.slice(moduleName.length + 1)
-          return { location, version: matchedVersion, name: moduleName, ecosystem }
+          const location = path.resolve(regDir, match)
+          if (location.startsWith(regDir + path.sep)) {
+            const matchedVersion = version || match.slice(moduleName.length + 1)
+            return { location, version: matchedVersion, name: moduleName, ecosystem: eco }
+          }
         }
       }
     } catch {}
-  } else if (ecosystem === 'pypi') {
+  } else if (eco === 'pypi') {
     const version = manifests.pypi[moduleName.toLowerCase()] || 'unknown'
     // 1. Check .venv and venv site-packages
     const venvDirs = ['.venv', 'venv']
@@ -272,13 +310,16 @@ export async function resolveModuleLocation(ecosystem, moduleName, options = {})
       try {
         const pyDirs = await fs.readdir(libDir)
         for (const py of pyDirs) {
-          const sp = path.join(libDir, py, 'site-packages', moduleName)
-          try {
-            const stat = await fs.stat(sp)
-            if (stat.isDirectory()) {
-              return { location: sp, version, name: moduleName, ecosystem }
-            }
-          } catch {}
+          const spBase = path.join(libDir, py, 'site-packages')
+          const sp = path.resolve(spBase, moduleName)
+          if (sp.startsWith(spBase + path.sep)) {
+            try {
+              const stat = await fs.stat(sp)
+              if (stat.isDirectory()) {
+                return { location: sp, version, name: moduleName, ecosystem: eco }
+              }
+            } catch {}
+          }
         }
       } catch {}
     }

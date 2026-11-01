@@ -54,4 +54,16 @@ describe('modules CLI commands', () => {
     assert.equal(res.status, 1)
     assert.match(res.stderr, /Unknown modules subcommand/)
   })
+
+  test('security: modules list rejects unsupported ecosystem', () => {
+    const res = runCli(['modules', 'list', '../secret'])
+    assert.equal(res.status, 1)
+    assert.match(res.stderr, /Unknown ecosystem/)
+  })
+
+  test('security: modules build-graph rejects path traversal in target', () => {
+    const res = runCli(['modules', 'build-graph', 'npm::../../../../etc/passwd'])
+    assert.equal(res.status, 1)
+    assert.match(res.stderr, /Invalid module target/)
+  })
 })

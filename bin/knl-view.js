@@ -31,7 +31,9 @@ import {
 import {
   readModulesCatalog,
   defaultEcosystemModel,
-  detectProjectManifests
+  detectProjectManifests,
+  isModuleSynced,
+  SUPPORTED_ECOSYSTEMS
 } from '../server/graph/modules_catalog.js'
 import { readModelRegistry, registerModel, generateModelName, modelRegistryPath } from '../server/models_registry.js'
 import {
@@ -1282,7 +1284,10 @@ async function runSourcesCollector(base, model, { quiet }) {
 async function runModulesCommand(sub, args, { values, settings }) {
   if (sub === 'list') {
     const ecoFilter = args?.[0]?.toLowerCase()
-    const ecosystems = ecoFilter ? [ecoFilter] : ['npm', 'go', 'cargo', 'pypi']
+    if (ecoFilter && !SUPPORTED_ECOSYSTEMS.has(ecoFilter)) {
+      fail(`Unknown ecosystem "${args[0]}". Supported: ${[...SUPPORTED_ECOSYSTEMS].join(', ')}`)
+    }
+    const ecosystems = ecoFilter ? [ecoFilter] : [...SUPPORTED_ECOSYSTEMS]
     const all = {}
     for (const eco of ecosystems) {
       all[eco] = await readModulesCatalog(eco)
@@ -1311,13 +1316,14 @@ async function runModulesCommand(sub, args, { values, settings }) {
     const base = anchordbClientOptions(settings.anchordb)
 
     if (!values.force) {
-      const catalog = await readModulesCatalog(ecosystem)
       const manifestVersions = await detectProjectManifests(process.cwd())
       const expectedVersion = manifestVersions[ecosystem]?.[moduleName]
       if (expectedVersion) {
-        const key = `${moduleName}@${expectedVersion}`
-        if (catalog[key]?.syncedAt) {
-          process.stdout.write(`module ${ecosystem}::${key} is already synced in model ${model} (${catalog[key].symbols.length} symbols). Use --force to rebuild.\n`)
+        const already = await isModuleSynced(ecosystem, moduleName, expectedVersion)
+        if (already) {
+          const catalog = await readModulesCatalog(ecosystem)
+          const key = `${moduleName}@${expectedVersion}`
+          process.stdout.write(`module ${ecosystem}::${key} is already synced in model ${model} (${catalog[key]?.symbolCount || 0} symbols). Use --force to rebuild.\n`)
           return
         }
       }
