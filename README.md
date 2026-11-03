@@ -57,9 +57,9 @@ npx @rahmantech/knl-view setup
 1. **Scaffolds `.knowledges/`**: Creates the documentation directory with a starter `README.md` index and template folders (or custom folders via `--folders`).
 2. **Installs Agent Skills**: Automatically places the `knl-view` skill into `.agents/skills/knl-view/` so coding agents (Antigravity, Claude, Codex, OpenCode) can read and manage your knowledge base.
 3. **Integrates Decision History**: Audits and offers to install the `decision-history` skill ([decisionskills](https://github.com/rachmanzz/decisionskills)) for append-only architecture decision tracking.
-4. **Protects Configuration**: Ensures `.gitignore` includes `knl-config.json` and temporary artifacts.
+4. **Protects Configuration**: Ensures `.gitignore` includes `.knowledges/` and `knl-config.json`.
 5. **Auto-maps AnchorDB Models**: Configures `knowledges` and `sources` model identifiers in `knl-config.json` and records them in the machine-wide registry.
-6. **Provisions AnchorDB**: Prompts to start or provision an AnchorDB instance (native binary on Linux, Podman/Docker container on Windows & macOS).
+6. **Provisions AnchorDB**: Prompts to start or provision an AnchorDB instance, using the same install methods as `knl-view install anchordb`.
 7. **Seeds Agent Rules**: Configures standardized KNL-View instructions in `AGENTS.md`, `GEMINI.md`, and `CLAUDE.md`.
 
 After setup, start the viewer immediately:
@@ -73,7 +73,7 @@ knl-view
 ### Requirements
 
 - Node.js 20.19 or newer.
-- A built frontend. `dist/` is committed to this repository, so an install from GitHub already has it. The CLI refuses to start without it and tells you so.
+- A built frontend. The npm tarball ships one; a git checkout does not (`dist/` is not tracked in this repository), so run `npm run build` after cloning. The CLI refuses to start without it and tells you so.
 
 ### Install
 
@@ -105,7 +105,7 @@ npm run build
 npm link
 ```
 
-`npm link` puts `knl-view` on your PATH from the checkout. To install a GitHub commit without cloning, run `npm install -g github:rachmanzz/knl-view --install-links`; without `--install-links`, npm 11 links against a temporary clone it deletes afterwards, which leaves a broken install.
+`npm link` puts `knl-view` on your PATH from the checkout; the `npm run build` step above is required, because `dist/` is not tracked in git.
 
 ## Usage
 
@@ -198,7 +198,7 @@ The full field reference lives in the bundled skill: `.agents/skills/knl-view/SK
 
 - **Zero Intermediary File**: Fully on-the-fly in-memory processing. Markdown files remain the sole source of truth without generating out-of-sync `graph.json` cache files.
 - **Decision Lineage Tracking**: Automatically discovers `supersedes`, `related_to`, and `affects_knowledge` edges from `decisionskills` decision blocks.
-- **Low-Token Subgraphs for AI**: Instead of loading an entire knowledge base into LLM context, query exact $N$-hop subgraphs in sub-milliseconds (< 1 ms).
+- **Low-Token Subgraphs for AI**: Instead of loading an entire knowledge base into LLM context, query exact $N$-hop subgraphs on demand.
 
 This engine is fully local: it needs no AnchorDB and no network. AnchorDB (see the optional install below) adds persistence on top: edges survive across sessions, are synced incrementally, and can be traced from any machine pointing at the same server.
 
@@ -410,7 +410,7 @@ Starts the API on port 8085 (override with `PORT`) and the Vite dev server on 51
 npm run dev -- ../some-project/.knowledges
 ```
 
-`dist/` is committed to this repository so that installs straight from GitHub keep working, because npm runs no build step for a git install without a `prepare` script. After changing the frontend, run `npm run build` and commit the result together with the source, or those installs stay on the previous build.
+`dist/` is not tracked in this repository. The published npm tarball contains a fresh build, so `npm install -g @rahmantech/knl-view` compiles nothing. A git checkout does not ship one: run `npm run build` there (and again after changing the frontend) before `knl-view` can serve the UI.
 
 ## License
 

@@ -585,7 +585,7 @@ async function runSetupCommand({ values, settings, projectConfig, globalConfig }
           await removeContainer(exec, containerStatus.runtime, containerStatus.name)
         } catch {}
         await runInstallCommand('anchordb', {
-          values: { ...values, method: 'container' },
+          values: { ...values },
           rl
         })
         const freshGlobal = await readGlobalConfig()
@@ -629,14 +629,14 @@ async function runSetupCommand({ values, settings, projectConfig, globalConfig }
       if (!wantInstall && interactive && !hasConfigured) {
         wantInstall = await askYesNo(
           rl,
-          'AnchorDB is not running. Would you like to create an AnchorDB container now?',
+          'AnchorDB is not running. Would you like to install and start AnchorDB now?',
           false
         )
       }
       if (wantInstall) {
-        process.stdout.write('\nProvisioning AnchorDB container ...\n')
+        process.stdout.write('\nProvisioning AnchorDB ...\n')
         await runInstallCommand('anchordb', {
-          values: { ...values, method: 'container' },
+          values: { ...values },
           rl
         })
         const freshGlobal = await readGlobalConfig()
@@ -664,9 +664,7 @@ async function runSetupCommand({ values, settings, projectConfig, globalConfig }
     }
 
     let currentConfig = projectConfig || {}
-    const hasGlobalAnchor = Boolean(currentGlobalConfig?.anchordb)
-    const hasLocalAnchor = Boolean(projectConfig?.anchordb)
-    const hasAnchor = hasGlobalAnchor || hasLocalAnchor
+    const hasAnchor = Boolean(currentGlobalConfig?.anchordb)
 
     if (hasAnchor) {
       const slug = projectSlug(process.cwd())
@@ -693,7 +691,7 @@ async function runSetupCommand({ values, settings, projectConfig, globalConfig }
       }
 
       const targetAnchordb = {
-        ...(settings.anchordb || currentGlobalConfig?.anchordb || currentConfig?.anchordb),
+        ...(settings.anchordb || currentGlobalConfig?.anchordb),
         model: nextModels.sources
       }
       const opts = anchordbClientOptions(targetAnchordb)

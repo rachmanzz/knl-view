@@ -3,8 +3,8 @@ import path from 'node:path'
 
 // Knowledge base builder for --init and --seed-skill.
 // Same principle as the map: NEVER destroy anything that already exists.
-// Existing files are skipped, and the .gitignore line is only added when
-// not already present.
+// Existing files are skipped, and missing .gitignore entries are only
+// added when not already present.
 
 export const STANDARD_DIRS = ['roadmap', 'features', 'docs']
 export const SKILL_ID = 'knl-view'
@@ -120,16 +120,17 @@ export async function seedSkill({
 
 export async function ensureGitignore({ cwd }) {
   const abs = path.join(cwd, '.gitignore')
-  const line = '.knowledges/'
+  const lines = ['.knowledges/', 'knl-config.json']
   let content = ''
   const stat = await statOrNull(abs)
   if (stat && stat.isFile()) content = await fs.readFile(abs, 'utf8')
 
-  const present = content.split(/\r?\n/).some((row) => row.trim() === line || row.trim() === '.knowledges')
-  if (present) return { path: abs, status: 'skipped' }
+  const rows = new Set(content.split(/\r?\n/).map((row) => row.trim()))
+  const missing = lines.filter((line) => !rows.has(line) && !rows.has(line.replace(/\/$/, '')))
+  if (!missing.length) return { path: abs, status: 'skipped' }
 
-  const next = content.length && !content.endsWith('\n') ? `${content}\n${line}\n` : `${content}${line}\n`
-  await fs.writeFile(abs, next, 'utf8')
+  const base = content.length && !content.endsWith('\n') ? `${content}\n` : content
+  await fs.writeFile(abs, `${base}${missing.join('\n')}\n`, 'utf8')
   return { path: abs, status: 'created' }
 }
 
@@ -370,7 +371,7 @@ stays completely off:
 \`\`\`json
 {
   "anchordb": {
-    "url": "wire://127.0.0.1:7448",
+    "url": "wire://127.0.0.1:17448",
     "token": "your-token",
     "sync": true
   }
@@ -425,12 +426,14 @@ plus a mapped \`consensus\` role.
 Sources graph (whole project): a third AnchorDB model, the \`sources\`
 role, holds the dependency graph of the whole project: files and their
 named symbols. Every file is a node (id = repo-relative path); import
-edges are extracted with tree-sitter syntax parsing (JS family and Go
-today) and stored in both directions (\`imports\`, \`imported_by\`).
+edges are extracted with tree-sitter syntax parsing (JavaScript,
+TypeScript/TSX, Go, Python, and Rust) and stored in both directions
+(\`imports\`, \`imported_by\`).
 Each file also defines symbol nodes: ids are \`<path>#<name>\` (class
 methods \`Class.method\`; a name defined more than once in one file gets
 a line suffix \`<path>#<name>@<line>\`), kinds are \`function\`,
-\`class\`, \`method\`, \`type\`. Edges: \`defines\`/\`defined_in\`
+\`class\`, \`method\`, \`type\`, \`interface\`, \`enum\`, \`struct\`,
+\`trait\`. Edges: \`defines\`/\`defined_in\`
 (file → symbol) and \`calls\`/\`called_by\` (symbol → symbol), both
 directions stored. Call resolution is conservative: the call belongs to
 its innermost enclosing symbol and the callee must match exactly one

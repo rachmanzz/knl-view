@@ -729,6 +729,7 @@ function sendJson(res, status, body) {
 }
 
 export function formatBytes(bytes) {
+  if (bytes == null) return '-'
   if (bytes < 1024) return `${bytes} B`
   const units = ['KB', 'MB', 'GB']
   let value = bytes / 1024
@@ -738,5 +739,5 @@ export function formatBytes(bytes) {
     unit += 1
   }
   const digits = value < 10 ? 1 : 0
-  return `${value.toFixed(digits).replace('.', ',')} ${units[unit]}`
+  return `${value.toFixed(digits)} ${units[unit]}`
 }

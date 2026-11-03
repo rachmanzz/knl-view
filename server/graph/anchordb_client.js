@@ -8,7 +8,7 @@ import { connectWire } from '@rahmantech/anchorwire'
 
 /**
  * Open an AnchorWire client connection.
- * @param {string|object} urlOrOptions - Example: 'wire://127.0.0.1:7448?model=knowledges'
+ * @param {string|object} urlOrOptions - Example: 'wire://127.0.0.1:17448?model=knowledges'
  */
 export async function createAnchorWireClient(urlOrOptions) {
   try {

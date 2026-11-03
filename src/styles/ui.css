@@ -142,7 +142,7 @@
   color: var(--accent-strong);
 }
 
-/* Segitiga tutup: kanan. Terbuka: bawah. Tukar langsung, tanpa gerak. */
+/* Closed triangle: right. Open: down. Immediate swap, no motion. */
 .disclose-tri {
   width: 0;
   height: 0;
@@ -176,7 +176,7 @@
   transition: background-color 120ms ease, color 120ms ease;
 }
 
-/* Berkas sejajar dengan nama folder di sebelahnya. */
+/* Files align with adjacent folder names. */
 .nav-link {
   padding-left: 2.75rem;
 }
@@ -187,14 +187,14 @@
   color: var(--ink);
 }
 
-/* Folder induk dari dokumen yang sedang terbuka. */
+/* Parent folder of the currently opened document. */
 .nav-name.is-active {
   background: var(--paper);
   color: var(--ink);
   font-weight: 600;
 }
 
-/* Folder / berkas yang sedang ditampilkan: merah = "anda di sini". */
+/* Currently displayed folder / file: red = "you are here". */
 .nav-name[aria-current="page"],
 .nav-link[aria-current="page"] {
   background: var(--paper);
@@ -275,8 +275,8 @@
 }
 
 /* ============================================================
-   Baris daftar isi (dot leader)
-   Baris 1: nama ... ukuran. Baris 2: judul isi berkas.
+   Index list rows (dot leader)
+   Row 1: name ... size. Row 2: the file's body title.
    ============================================================ */
 
 .index-list {
@@ -457,7 +457,7 @@
 }
 
 /* ============================================================
-   Daftar isi dokumen (inline + rel)
+   Document table of contents (inline + rail)
    ============================================================ */
 
 .toc-inline {
@@ -729,7 +729,7 @@
 }
 
 /* ============================================================
-   Daftar "Terbaru diubah"
+"Recently changed" list
    ============================================================ */
 
 .recent-list {

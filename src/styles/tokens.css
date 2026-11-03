@@ -121,7 +121,7 @@ a:hover {
   color: var(--accent-strong);
 }
 
-/* --- Fokus: merah Swiss, terlihat di atas putih, untuk keyboard --- */
+/* --- Focus: Swiss red, clearly visible against white, for keyboard navigation --- */
 
 :focus-visible {
   outline: 2px solid var(--focus);
@@ -176,7 +176,7 @@ a:hover {
   }
 }
 
-/* --- Cetak: dokumen harus terbaca di kertas --- */
+/* --- Print: documents must be legible on paper --- */
 
 @media print {
   :root {

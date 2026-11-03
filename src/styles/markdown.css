@@ -63,7 +63,7 @@
   margin-top: 0;
 }
 
-/* --- Paragraf & jarak vertikal --- */
+/* --- Paragraphs & vertical spacing --- */
 
 .md p,
 .md ul,
@@ -130,7 +130,7 @@
   list-style: decimal;
 }
 
-/* Daftar tugas (GFM): centang nyata, warna aksen merah. */
+/* Task lists (GFM): native checkboxes, red accent color. */
 .md li.task {
   list-style: none;
   margin-left: -1.35rem;
@@ -147,7 +147,7 @@
   accent-color: var(--accent);
 }
 
-/* --- Kutipan --- */
+/* --- Blockquotes --- */
 
 .md blockquote {
   padding: var(--s-2) 0 var(--s-2) var(--s-4);
@@ -164,7 +164,7 @@
   margin-bottom: 0;
 }
 
-/* --- Kode --- */
+/* --- Code --- */
 
 .md code {
   font-family: var(--mono);
@@ -280,7 +280,7 @@
   border-left: 2px solid var(--rule-strong);
 }
 
-/* Judul tujuan lompatan anchor: ringkas, tanpa animasi. */
+/* Anchor jump targets: concise, no animation. */
 .md h1:focus,
 .md h2:focus,
 .md h3:focus,
@@ -289,7 +289,7 @@
   outline-offset: 4px;
 }
 
-/* --- Diagram mermaid: fence ```mermaid jadi SVG, dengan jeda lihat sumber --- */
+/* --- Mermaid diagram: fence ```mermaid into SVG, with pause to view source --- */
 
 .md .mermaid-block {
   margin: var(--s-4) 0;

@@ -88,17 +88,29 @@ describe('seedSkill', () => {
 })
 
 describe('ensureGitignore', () => {
-  test('creates .gitignore with .knowledges/ when missing', async () => {
+  test('creates .gitignore with .knowledges/ and knl-config.json when missing', async () => {
     const dir = makeTempDir()
     const result = await ensureGitignore({ cwd: dir })
     assert.equal(result.status, 'created')
     const content = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')
     assert.ok(content.includes('.knowledges/'))
+    assert.ok(content.includes('knl-config.json'))
   })
 
-  test('skips if .knowledges/ already ignored', async () => {
+  test('adds only the missing entries', async () => {
     const dir = makeTempDir()
     fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\n.knowledges/\n', 'utf8')
+    const result = await ensureGitignore({ cwd: dir })
+    assert.equal(result.status, 'created')
+    const content = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')
+    assert.ok(content.includes('node_modules/'))
+    assert.ok(content.includes('.knowledges/'))
+    assert.ok(content.includes('knl-config.json'))
+  })
+
+  test('skips when both entries are already ignored', async () => {
+    const dir = makeTempDir()
+    fs.writeFileSync(path.join(dir, '.gitignore'), '.knowledges/\nknl-config.json\n', 'utf8')
     const result = await ensureGitignore({ cwd: dir })
     assert.equal(result.status, 'skipped')
   })
