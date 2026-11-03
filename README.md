@@ -115,6 +115,9 @@ knl-view --path=../other-project/.knowledges
 knl-view --port 8086 --host 0.0.0.0        # expose on the network
 knl-view graph trace --target=README.md    # query on-demand subgraph for AI
 knl-view graph trace --target=DEC-20261030-135001 --hops=1
+knl-view anchordb status                   # is the AnchorDB daemon running? (method, ports)
+knl-view anchordb start                    # start an installed but stopped daemon
+knl-view anchordb stop                     # stop a running daemon
 knl-view --init                            # scaffold a new base (wizard, no server)
 knl-view --seed-skill=knl-view --dir=global --yes
 ```
@@ -353,6 +356,10 @@ Run `knl-view install anchordb` to install AnchorDB and write the `anchordb` blo
 - Custom token: `--token=<text>` (default: cryptographic 32-byte hex token).
 - Port conflict handling: automatically detects if port 17448 is occupied and suggests alternative free ports.
 - Data safety: if a container named `anchordb-knlview` already exists, the installer stops rather than overwriting existing data.
+
+#### Managing the daemon
+
+The daemon is an ordinary detached process (binary) or a container: it does not survive a reboot on any platform by itself. `knl-view anchordb status`, `start`, and `stop` inspect and control it directly, without going through setup or install again.
 
 ## Configuration
 

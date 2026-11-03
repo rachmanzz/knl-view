@@ -227,6 +227,12 @@ export function normalizeAnchordb(raw) {
   if (containerId) anchordb.container_id = containerId
   const containerCreatedOn = cleanString(raw.container_created_on)
   if (containerCreatedOn) anchordb.container_created_on = containerCreatedOn
+  // Ports the installer/start command actually bound; used by "anchordb start"
+  // to restart the binary daemon on the same ports.
+  const wirePort = Number(raw.wire_port)
+  if (Number.isInteger(wirePort) && wirePort > 0 && wirePort < 65536) anchordb.wire_port = wirePort
+  const httpPort = Number(raw.http_port)
+  if (Number.isInteger(httpPort) && httpPort > 0 && httpPort < 65536) anchordb.http_port = httpPort
   return anchordb
 }
 

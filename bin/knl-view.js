@@ -45,8 +45,10 @@ import {
   mergeGlobalAnchordb,
   availableContainerRuntimes,
   detectRunningDaemon,
+  binaryServerPids,
   inspectContainerStatus,
   startContainer,
+  stopContainer,
   removeContainer,
   detectGraphify,
   checkDecisionSkillsStatus,
@@ -97,6 +99,9 @@ Commands:
   model check               Check this project's models map and the global registry
   install anchordb          Install AnchorDB: binary from GitHub Releases on
                             Linux and macOS; docker/podman container elsewhere
+  anchordb status           Show the AnchorDB daemon state (running, method, ports)
+  anchordb start            Start an installed but stopped AnchorDB daemon
+  anchordb stop             Stop a running AnchorDB daemon
   consensus claim "<text>"  Register a content-addressed claim (c-<hash>)
   consensus agree <a> <b>   Claim a supports claim b (stored in AnchorDB)
   consensus contradict <a> <b>  Claim a opposes claim b
@@ -241,6 +246,14 @@ if (modelCommand) {
 // other platforms) then write the anchordb block to the global config.
 if (positionals?.[0] === 'install') {
   await runInstallCommand(positionals?.[1], { values })
+  process.exit(0)
+}
+
+// The "anchordb" command: status | start | stop for an already installed
+// daemon. Lifecycle only; installing stays in "install anchordb". A bare
+// "knl-view anchordb" behaves like "anchordb status".
+if (positionals?.[0] === 'anchordb') {
+  await runAnchordbCommand(positionals?.[1] || 'status')
   process.exit(0)
 }
 
@@ -790,6 +803,146 @@ async function askYesNo(rl, question, fallback) {
   return answer === 'y' || answer === 'yes'
 }
 
+// Start the binary daemon detached: data in ~/.knlview/anchordb-data, log in
+// ~/.knlview/anchordb.log. Shared by "install anchordb" and "anchordb start".
+async function startBinaryDaemon({ knlViewDir, token, httpPort, wirePort }) {
+  const dataDir = path.join(knlViewDir, 'anchordb-data')
+  await fs.promises.mkdir(dataDir, { recursive: true })
+  const logFd = await fs.promises.open(path.join(knlViewDir, 'anchordb.log'), 'a')
+  const child = spawn(path.join(knlViewDir, 'bin', 'anchordb-server'), [], {
+    env: {
+      ...process.env,
+      ANCHORDB_AUTH_TOKEN: token,
+      ANCHORDB_DATA_DIR: dataDir,
+      ANCHORDB_PORT: String(httpPort),
+      ANCHORDB_WIRE_PORT: String(wirePort)
+    },
+    detached: true,
+    stdio: ['ignore', logFd.fd, logFd.fd]
+  })
+  child.unref()
+  logFd.close()
+  await waitAnchorHealth(httpPort)
+}
+
+// The "anchordb" command: inspect and control an already installed daemon
+// without going through setup or install again. Lifecycle only.
+async function runAnchordbCommand(action) {
+  if (!['status', 'start', 'stop'].includes(action)) {
+    fail(`Unknown anchordb action "${action}". Use: status, start, stop.`)
+  }
+  const home = process.env.HOME || process.cwd()
+  const knlViewDir = knlGlobalDir(home)
+  const containerStatus = await inspectContainerStatus(exec)
+  const daemonMeta = await detectRunningDaemon(exec)
+  const global = await readGlobalConfig()
+  const anchordb = global?.config?.anchordb || null
+  let binaryInstalled = false
+  try {
+    await fs.promises.access(path.join(knlViewDir, 'bin', 'anchordb-server'))
+    binaryInstalled = true
+  } catch {}
+
+  const wireUrlFrom = (block) => {
+    const match = /^wire:\/\/[^?]*:(\d+)/.exec(String(block?.url || ''))
+    return match ? Number(match[1]) : null
+  }
+  const runningWirePort = daemonMeta
+    ? Number(daemonMeta.wire_port) || anchordb?.wire_port || wireUrlFrom(anchordb) || WIRE_PORT_DEFAULT
+    : null
+  const runningHttpPort = daemonMeta
+    ? daemonMeta.container_name
+      ? Number(containerStatus.http_port) || HTTP_PORT_DEFAULT
+      : anchordb?.http_port || runningWirePort - 1
+    : null
+
+  if (action === 'status') {
+    if (daemonMeta) {
+      process.stdout.write(`AnchorDB: running (${daemonMeta.daemon || daemonMeta.deamon})\n`)
+      process.stdout.write(`  wire   wire://127.0.0.1:${runningWirePort}\n`)
+      process.stdout.write(`  HTTP   http://127.0.0.1:${runningHttpPort}/health\n`)
+      if (daemonMeta.container_name) process.stdout.write(`  container ${daemonMeta.container_name}\n`)
+    } else if (containerStatus.exists) {
+      process.stdout.write(`AnchorDB: stopped (container ${containerStatus.name}, ${containerStatus.runtime})\n`)
+      process.stdout.write('  start it: knl-view anchordb start\n')
+    } else if (binaryInstalled) {
+      process.stdout.write('AnchorDB: installed (binary) but not running\n')
+      process.stdout.write('  start it: knl-view anchordb start\n')
+    } else if (anchordb?.url) {
+      process.stdout.write(`AnchorDB: configured (${anchordb.url}) but nothing detected on this machine\n`)
+    } else {
+      process.stdout.write('AnchorDB: not installed (the viewer runs fully local without it)\n')
+      process.stdout.write('  install: knl-view install anchordb\n')
+    }
+    return
+  }
+
+  if (action === 'start') {
+    if (daemonMeta) {
+      process.stdout.write(`AnchorDB is already running (${daemonMeta.daemon || daemonMeta.deamon}).\n`)
+      process.stdout.write(`  wire   wire://127.0.0.1:${runningWirePort}\n`)
+      process.stdout.write(`  HTTP   http://127.0.0.1:${runningHttpPort}/health\n`)
+      return
+    }
+    if (containerStatus.exists) {
+      if (!containerStatus.valid) {
+        fail(`Container "${containerStatus.name}" is in an invalid state (${containerStatus.status}).\nReinstall with: knl-view install anchordb`)
+      }
+      process.stdout.write(`Starting container "${containerStatus.name}" ...\n`)
+      await startContainer(exec, containerStatus.runtime, containerStatus.name)
+      await waitAnchorHealth(Number(containerStatus.http_port) || HTTP_PORT_DEFAULT)
+      process.stdout.write('  container is running\n')
+      process.stdout.write(`  wire   wire://127.0.0.1:${containerStatus.wire_port}\n`)
+      process.stdout.write(`  HTTP   http://127.0.0.1:${containerStatus.http_port}/health\n`)
+      return
+    }
+    if (binaryInstalled) {
+      const wirePort = anchordb?.wire_port || wireUrlFrom(anchordb) || WIRE_PORT_DEFAULT
+      const httpPort = anchordb?.http_port || (wirePort - 1 > 0 ? wirePort - 1 : HTTP_PORT_DEFAULT)
+      const portInfo = await resolveAnchorPorts({ desiredWirePort: wirePort, desiredHttpPort: httpPort })
+      if (!portInfo.wireAvailable || !portInfo.httpAvailable) {
+        fail(`Port ${!portInfo.wireAvailable ? portInfo.wirePort : portInfo.httpPort} is already in use, but no AnchorDB daemon was detected.\nCheck with: knl-view anchordb status`)
+      }
+      const token = anchordb?.token || generateToken()
+      await startBinaryDaemon({ knlViewDir, token, httpPort, wirePort })
+      const updated = {
+        ...(anchordb || {}),
+        url: `wire://127.0.0.1:${wirePort}`,
+        token,
+        sync: anchordb?.sync !== false,
+        daemon: 'binary',
+        deamon: 'binary',
+        wire_port: wirePort,
+        http_port: httpPort
+      }
+      await mergeGlobalAnchordb(home, updated)
+      process.stdout.write(`  server running (log: ${path.join(knlViewDir, 'anchordb.log')})\n`)
+      process.stdout.write(`  wire   wire://127.0.0.1:${wirePort}\n`)
+      process.stdout.write(`  HTTP   http://127.0.0.1:${httpPort}/health\n`)
+      return
+    }
+    fail('No AnchorDB installation found.\nInstall first: knl-view install anchordb')
+  }
+
+  if (action === 'stop') {
+    if (containerStatus.exists && containerStatus.running) {
+      process.stdout.write(`Stopping container "${containerStatus.name}" ...\n`)
+      await stopContainer(exec, containerStatus.runtime, containerStatus.name)
+      process.stdout.write('  container stopped\n')
+      return
+    }
+    const pids = (await binaryServerPids(exec)).filter((pid) => pid !== process.pid)
+    if (pids.length) {
+      for (const pid of pids) {
+        try { process.kill(pid, 'SIGTERM') } catch {}
+      }
+      process.stdout.write(`  sent SIGTERM to anchordb-server (pid ${pids.join(', ')})\n`)
+      return
+    }
+    process.stdout.write('AnchorDB is not running. Nothing to stop.\n')
+  }
+}
+
 // The "install anchordb" command. Linux and macOS: binary from GitHub
 // Releases (verified against SHA256SUMS.txt). Windows (and anyone who
 // prefers it): ghcr.io container via docker/podman. After install, the
@@ -896,23 +1049,7 @@ async function runInstallCommand(target, { values, rl: externalRl = null }) {
         ? await askYesNo(rl, 'Start the AnchorDB server now?', true)
         : true
       if (runNow) {
-        const dataDir = path.join(knlViewDir, 'anchordb-data')
-        await fsp.mkdir(dataDir, { recursive: true })
-        const logFd = await fsp.open(path.join(knlViewDir, 'anchordb.log'), 'a')
-        const child = spawn(path.join(binDir, 'anchordb-server'), [], {
-          env: {
-            ...process.env,
-            ANCHORDB_AUTH_TOKEN: token,
-            ANCHORDB_DATA_DIR: dataDir,
-            ANCHORDB_PORT: String(httpPort),
-            ANCHORDB_WIRE_PORT: String(wirePort)
-          },
-          detached: true,
-          stdio: ['ignore', logFd.fd, logFd.fd]
-        })
-        child.unref()
-        logFd.close()
-        await waitAnchorHealth(httpPort)
+        await startBinaryDaemon({ knlViewDir, token, httpPort, wirePort })
         started = true
         process.stdout.write(`  server running (log: ${path.join(knlViewDir, 'anchordb.log')})\n`)
       }
@@ -1010,7 +1147,9 @@ async function runInstallCommand(target, { values, rl: externalRl = null }) {
     url: `wire://127.0.0.1:${wirePort}`,
     token,
     sync: true,
-    deamon: daemonType
+    deamon: daemonType,
+    wire_port: wirePort,
+    http_port: httpPort
   }
   if (containerMetadata) {
     anchordbBlock.container_created_on = containerMetadata.container_created_on

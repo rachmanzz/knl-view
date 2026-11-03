@@ -187,11 +187,13 @@ export async function inspectContainerStatus(exec, name = CONTAINER_NAME) {
         const envStr = parts.slice(4).join('|')
         let token = null
         let port = String(WIRE_PORT_DEFAULT)
+        let httpPort = String(HTTP_PORT_DEFAULT)
         try {
           const envs = JSON.parse(envStr)
           for (const e of envs) {
             if (e.startsWith('ANCHORDB_AUTH_TOKEN=')) token = e.slice('ANCHORDB_AUTH_TOKEN='.length)
             if (e.startsWith('ANCHORDB_WIRE_PORT=')) port = e.slice('ANCHORDB_WIRE_PORT='.length)
+            if (e.startsWith('ANCHORDB_PORT=')) httpPort = e.slice('ANCHORDB_PORT='.length)
           }
         } catch {}
 
@@ -205,7 +207,8 @@ export async function inspectContainerStatus(exec, name = CONTAINER_NAME) {
           running,
           valid,
           token,
-          wire_port: port
+          wire_port: port,
+          http_port: httpPort
         }
       }
     } catch {
@@ -223,12 +226,17 @@ export async function inspectContainerStatus(exec, name = CONTAINER_NAME) {
     running: false,
     valid: false,
     token: null,
-    wire_port: String(WIRE_PORT_DEFAULT)
+    wire_port: String(WIRE_PORT_DEFAULT),
+    http_port: String(HTTP_PORT_DEFAULT)
   }
 }
 
 export async function startContainer(exec, runtime, name = CONTAINER_NAME) {
   await exec(runtime, ['start', name])
+}
+
+export async function stopContainer(exec, runtime, name = CONTAINER_NAME) {
+  await exec(runtime, ['stop', name])
 }
 
 export async function removeContainer(exec, runtime, name = CONTAINER_NAME) {
@@ -434,4 +442,21 @@ export async function detectRunningDaemon(exec) {
   } catch {}
 
   return null
+}
+
+/**
+ * PIDs of running anchordb-server processes (the binary daemon), via pgrep.
+ * Empty when none is running or pgrep is unavailable.
+ */
+export async function binaryServerPids(exec) {
+  try {
+    const { stdout } = await exec('pgrep', ['-f', 'anchordb-server'])
+    return stdout
+      .trim()
+      .split('\n')
+      .map((row) => Number(row.trim()))
+      .filter((pid) => Number.isInteger(pid) && pid > 0)
+  } catch {
+    return []
+  }
 }

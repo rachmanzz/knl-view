@@ -202,6 +202,15 @@ describe('normalizeAnchordb', () => {
     assert.equal(normalizeAnchordb(null), null)
   })
 
+  test('keeps numeric wire_port and http_port, drops invalid ones', () => {
+    const a = normalizeAnchordb({ url: 'wire://127.0.0.1:17448', wire_port: 17448, http_port: 17447 })
+    assert.equal(a.wire_port, 17448)
+    assert.equal(a.http_port, 17447)
+    const b = normalizeAnchordb({ url: 'wire://127.0.0.1:17448', wire_port: 'nope', http_port: 99999 })
+    assert.equal(b.wire_port, undefined)
+    assert.equal(b.http_port, undefined)
+  })
+
   test('keeps token, model, sync, and relations', () => {
     const a = normalizeAnchordb({
       url: 'tcp://localhost:7448',

@@ -11,8 +11,10 @@ import {
   availableContainerRuntimes,
   detectContainerRuntime,
   detectRunningDaemon,
+  binaryServerPids,
   inspectContainerStatus,
   startContainer,
+  stopContainer,
   removeContainer,
   detectGraphify,
   checkDecisionSkillsStatus,
@@ -232,6 +234,21 @@ describe('inspectContainerStatus', () => {
     assert.equal(res.exists, false)
     assert.equal(res.running, false)
   })
+
+  test('parses token, wire port, and HTTP port from the container env', async () => {
+    const envs = JSON.stringify(['ANCHORDB_AUTH_TOKEN=secret-123', 'ANCHORDB_PORT=17447', 'ANCHORDB_WIRE_PORT=17448'])
+    const mockExec = async (cmd, args) => {
+      if (cmd === 'podman' && args[0] === 'inspect') {
+        return { stdout: `podman-cid-abcdef123456|2026-10-31T08:00:00Z|running|true|${envs}\n` }
+      }
+      throw new Error('not found')
+    }
+
+    const res = await inspectContainerStatus(mockExec)
+    assert.equal(res.token, 'secret-123')
+    assert.equal(res.wire_port, '17448')
+    assert.equal(res.http_port, '17447')
+  })
 })
 
 describe('container lifecycle actions and detectGraphify', () => {
@@ -253,6 +270,34 @@ describe('container lifecycle actions and detectGraphify', () => {
     }
     await removeContainer(mockExec, 'podman', 'my-container')
     assert.deepEqual(invoked, { cmd: 'podman', args: ['rm', '-f', 'my-container'] })
+  })
+
+  test('stopContainer invokes stop with name', async () => {
+    let invoked = null
+    const mockExec = async (cmd, args) => {
+      invoked = { cmd, args }
+      return { stdout: '' }
+    }
+    await stopContainer(mockExec, 'docker', 'my-container')
+    assert.deepEqual(invoked, { cmd: 'docker', args: ['stop', 'my-container'] })
+  })
+
+  test('binaryServerPids parses pgrep output into numbers', async () => {
+    const mockExec = async (cmd, args) => {
+      assert.equal(cmd, 'pgrep')
+      assert.deepEqual(args, ['-f', 'anchordb-server'])
+      return { stdout: '4242\n828\n' }
+    }
+    assert.deepEqual(await binaryServerPids(mockExec), [4242, 828])
+  })
+
+  test('binaryServerPids returns an empty list when pgrep finds nothing', async () => {
+    const mockExec = async () => {
+      const err = new Error('exit code 1')
+      err.code = 1
+      throw err
+    }
+    assert.deepEqual(await binaryServerPids(mockExec), [])
   })
 
   test('detectGraphify returns true when which succeeds', async () => {
