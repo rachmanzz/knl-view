@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useKnowledge } from '../knowledge.jsx'
-import { t } from '../i18n.js'
 import { docHref, dirHref, contentsHref } from '../router.js'
 import { ancestorDirs, isUnder, orderForIndex, allFiles, findRootReadme } from '../tree.js'
 import { displayLabel, displaySub } from '../label.js'
@@ -66,53 +65,53 @@ export default function Sidebar({ route, open, onClose }) {
     )
 
   return (
-    <aside id="sidebar" className={open ? 'sidebar is-open' : 'sidebar'} aria-label={t('app.sidebarLabel')}>
+    <aside id="sidebar" className={open ? 'sidebar is-open' : 'sidebar'} aria-label="Knowledge base index">
       <div className="sidebar-head">
         <div className="brand">
           <span className="brand-mark">knl-view</span>
           {meta && <span className="brand-source">{meta.name}</span>}
         </div>
         <button type="button" className="btn btn-plain sidebar-close" onClick={onClose}>
-          {t('topbar.closeIndex')}
+          Close index
         </button>
       </div>
 
       <div className="sidebar-search">
-        <label htmlFor="sidebar-filter">{t('sidebar.search')}</label>
+        <label htmlFor="sidebar-filter">Search files</label>
         <input
           id="sidebar-filter"
           type="search"
           value={query}
-          placeholder={t('sidebar.placeholder')}
+          placeholder="file names or titles"
           onChange={(event) => setQuery(event.target.value)}
         />
       </div>
 
-      <nav className="nav" aria-label={t('sidebar.structure')}>
+      <nav className="nav" aria-label="File structure">
         {!tree && status === 'loading' && (
           <p className="nav-note" role="status">
-            {t('states.loadingIndex')}
+            Loading file index...
           </p>
         )}
         {status === 'error' && (
-          <p className="nav-note nav-note-error">{t('sidebar.indexUnavailable')}</p>
+          <p className="nav-note nav-note-error">Index unavailable. Reload to try again.</p>
         )}
         {results && results.length === 0 && (
           <div className="nav-note">
             <p>
-              {t('sidebar.noMatch')} <span className="mono">"{query.trim()}"</span>.
+              No files matched <span className="mono">"{query.trim()}"</span>.
             </p>
             <button type="button" className="btn btn-plain" onClick={() => setQuery('')}>
-              {t('sidebar.clearFilter')}
+              Clear filter
             </button>
           </div>
         )}
         {results && results.length > 0 && (
           <>
             <p className="nav-count" role="status">
-              {countLabel(results.length, t('sidebar.files'))} {t('sidebar.matched')}
+              {countLabel(results.length, 'files')} matched
             </p>
-            <ul className="nav-list" aria-label={t('sidebar.searchResults')}>
+            <ul className="nav-list" aria-label="Search results">
               {results.map((node) => (
                 <li key={node.path}>
                   <a
@@ -140,7 +139,7 @@ export default function Sidebar({ route, open, onClose }) {
                   href={rootHref}
                   aria-current={onIndex ? 'page' : undefined}
                 >
-                  {t('index.index')}
+                  index
                 </a>
               </li>
               <li className="nav-alias-item">
@@ -149,7 +148,7 @@ export default function Sidebar({ route, open, onClose }) {
                   href={contentsHref()}
                   aria-current={onContents ? 'page' : undefined}
                 >
-                  {t('sidebar.contents')}
+                  contents
                 </a>
               </li>
             </ul>
@@ -164,7 +163,7 @@ export default function Sidebar({ route, open, onClose }) {
             {meta.root}
           </span>
           <span>
-            {countLabel(meta.files, t('sidebar.files'))} · {countLabel(meta.dirs, t('sidebar.folder'))}
+            {countLabel(meta.files, 'files')} · {countLabel(meta.dirs, 'folder')}
           </span>
         </div>
       )}
@@ -188,7 +187,7 @@ function DirRow({ node, route, expanded, onToggle, renderNodes }) {
         >
           <span className="disclose-tri" aria-hidden="true" />
           <span className="sr-only">
-            {isOpen ? t('sidebar.close') : t('sidebar.open')} folder {node.name}
+            {isOpen ? 'Close' : 'Open'} folder {node.name}
           </span>
         </button>
         <a
@@ -202,7 +201,7 @@ function DirRow({ node, route, expanded, onToggle, renderNodes }) {
       {isOpen && (
         <ul className="nav-list">
           {node.children.length === 0 ? (
-            <li className="nav-note nav-note-tight">{t('sidebar.emptyFolder')}</li>
+            <li className="nav-note nav-note-tight">empty folder</li>
           ) : (
             renderNodes(node.children)
           )}

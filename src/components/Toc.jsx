@@ -1,5 +1,3 @@
-import { scrollToId } from '../markdown.js'
-import { t } from '../i18n.js'
 
 export default function Toc({ headings, activeId, onSelect, variant = 'rail' }) {
   const items = headings.filter((heading) => heading.level <= 3)
@@ -25,18 +23,16 @@ export default function Toc({ headings, activeId, onSelect, variant = 'rail' }) 
   if (variant === 'inline') {
     return (
       <details className="toc toc-inline">
-        <summary>{t('toc.contentsShort')}</summary>
+        <summary>Contents</summary>
         {list}
       </details>
     )
   }
 
   return (
-    <aside className="toc toc-rail" aria-label={t('toc.contents')}>
+    <aside className="toc toc-rail" aria-label="Contents">
       <p className="section-head">Contents</p>
       {list}
     </aside>
   )
 }
-
-export { scrollToId }

@@ -1,4 +1,3 @@
-import { t } from './i18n.js'
 
 // One place for display labels. Its rules:
 // - the disk decides existence, the map may replace the label (`title`);
@@ -9,7 +8,7 @@ export function displayLabel(node) {
   if (node.type === 'dir') return node.title || node.name
   if (node.titleFromMap && node.title) return node.title
   const name = node.name || ''
-  if (/^readme(\.(md|markdown|prd))?$/i.test(name)) return t('index.index')
+  if (/^readme(\.(md|markdown|prd))?$/i.test(name)) return 'index'
   return /\.md$/i.test(name) ? name.replace(/\.md$/i, '') : name
 }
 

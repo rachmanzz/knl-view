@@ -7,7 +7,6 @@ import { formatBytes, formatDateTime } from '../format.js'
 import Breadcrumb from '../components/Breadcrumb.jsx'
 import Toc from '../components/Toc.jsx'
 import { ErrorState, Loading } from '../components/States.jsx'
-import { t } from '../i18n.js'
 import { displayLabel, displaySub } from '../label.js'
 import { renderMermaid } from '../mermaid.js'
 
@@ -93,11 +92,11 @@ export default function DocView({ route }) {
         <article className="doc">
           <Breadcrumb kind="doc" path={route.path} />
           <ErrorState
-            title={t('doc.notFound')}
+            title="No document"
             detail={`"${route.path}" is not in the knowledge base index. The file may have been moved or deleted.`}
           >
             <a className="btn" href="#/">
-              {t('app.backHome')}
+              Back to home
             </a>
           </ErrorState>
         </article>
@@ -110,7 +109,7 @@ export default function DocView({ route }) {
       <div className="reading">
         <article className="doc">
           <Breadcrumb kind="doc" path={route.path} />
-          <Loading label={`${t('topbar.loading')} ${route.path}...`} />
+          <Loading label={`Loading ${route.path}...`} />
         </article>
       </div>
     )
@@ -121,12 +120,12 @@ export default function DocView({ route }) {
       <div className="reading">
         <article className="doc">
           <Breadcrumb kind="doc" path={route.path} />
-          <ErrorState title={t('doc.loadFailed')} detail={state.error}>
+          <ErrorState title="Failed to load document." detail={state.error}>
             <button type="button" className="btn" onClick={() => setAttempt((value) => value + 1)}>
-              {t('states.retry')}
+              Retry
             </button>
             <a className="btn btn-plain" href={dirHref(route.path.split('/').slice(0, -1).join('/'))}>
-              {t('doc.openParent')}
+              Open parent folder
             </a>
           </ErrorState>
         </article>
@@ -148,7 +147,7 @@ export default function DocView({ route }) {
             <span className="mono">{route.path}</span>
             <span>{formatBytes(state.doc.size)}</span>
             <span>
-              {t('doc.updated')} {formatDateTime(state.doc.mtime)}
+              updated {formatDateTime(state.doc.mtime)}
             </span>
           </p>
           {!prepared.hasH1 && <h1 className="doc-title">{node.title || node.name}</h1>}
@@ -169,10 +168,10 @@ export default function DocView({ route }) {
         />
 
         {(previous || next) && (
-          <nav className="doc-pager" aria-label={t('doc.pagerLabel')}>
+          <nav className="doc-pager" aria-label="Other documents in this folder">
             {previous ? (
               <a className="pager-link pager-prev" href={docHref(previous.path)}>
-                <span className="pager-label">{t('doc.prev')}</span>
+                <span className="pager-label">Previous</span>
                 <span className="pager-name mono">{displayLabel(previous)}</span>
                 {displaySub(previous) && <span className="pager-title">{displaySub(previous)}</span>}
               </a>
@@ -181,7 +180,7 @@ export default function DocView({ route }) {
             )}
             {next && (
               <a className="pager-link pager-next" href={docHref(next.path)}>
-                <span className="pager-label">{t('doc.next')}</span>
+                <span className="pager-label">Next</span>
                 <span className="pager-name mono">{displayLabel(next)}</span>
                 {displaySub(next) && <span className="pager-title">{displaySub(next)}</span>}
               </a>

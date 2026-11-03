@@ -1,4 +1,3 @@
-import { t, onLangChange } from './i18n.js'
 
 // A ```mermaid fence inside .md is rendered as an SVG diagram.
 // The mermaid module is lazy-loaded: it is only downloaded when a mermaid
@@ -30,7 +29,7 @@ const FLOWCHART_STOP = new Set([
 function flowchartNodeIds(src) {
   const cleaned = src
     .replace(/%%[^\n]*/g, ' ')
-    .replace(/"[^"\n]*"/g, '""')
+    .replace(/'[^'\n]*"/g, '""')
     .replace(/\|[^|\n]*\|/g, '||')
     .replace(/\[\[?[^\]]*\]\]?/g, '[]')
     .replace(/\{[^{}]*\}/g, '{}')
@@ -118,7 +117,7 @@ async function renderAll(codes) {
 
     let svg = ''
     try {
-      // Colored source is for rendering only; the "Show source" view stays original.
+      // Colored source is for rendering only; the 'Show source' view stays original.
       svg = (await mermaid.render(id, withNodeColors(source))).svg
     } catch {
       try {
@@ -153,17 +152,17 @@ async function renderAll(codes) {
     const toggle = document.createElement('button')
     toggle.type = 'button'
     toggle.className = 'btn btn-plain mermaid-toggle'
-    toggle.textContent = t('mermaid.showSource')
+    toggle.textContent = 'Show source'
     toggle.addEventListener('click', () => {
       const showSource = figure.dataset.view === 'diagram'
       figure.dataset.view = showSource ? 'source' : 'diagram'
-      toggle.textContent = t(showSource ? 'mermaid.hideSource' : 'mermaid.showSource')
+      toggle.textContent = showSource ? 'Show diagram' : 'Show source'
     })
 
     const zoom = document.createElement('button')
     zoom.type = 'button'
     zoom.className = 'btn btn-plain mermaid-zoom-btn'
-    zoom.textContent = t('mermaid.zoom')
+    zoom.textContent = 'Zoom'
     zoom.addEventListener('click', () => openZoom(diagram, zoom))
 
     const actions = document.createElement('div')
@@ -182,7 +181,7 @@ function failNote(code) {
   if (!pre || pre.previousElementSibling?.classList.contains('mermaid-note')) return
   const note = document.createElement('p')
   note.className = 'inline-note mermaid-note'
-  note.textContent = t('mermaid.failed')
+  note.textContent = 'Diagram could not be rendered; showing source.'
   pre.before(note)
 }
 
@@ -240,15 +239,15 @@ function openZoom(diagram, trigger) {
   const scaleLabel = document.createElement('span')
   scaleLabel.className = 'mermaid-modal-scale mono'
 
-  const btnOut = modalBtn('out', '−', t('mermaid.zoomOut'), () => zoomAtCenter(1 / 1.25))
-  const btnIn = modalBtn('in', '+', t('mermaid.zoomIn'), () => zoomAtCenter(1.25))
-  const btnReset = modalBtn('reset', t('mermaid.reset'), t('mermaid.reset'), () => {
+  const btnOut = modalBtn('out', '−', 'Zoom out', () => zoomAtCenter(1 / 1.25))
+  const btnIn = modalBtn('in', '+', 'Zoom in', () => zoomAtCenter(1.25))
+  const btnReset = modalBtn('reset', 'Reset', 'Reset', () => {
     scale = 1
     x = 0
     y = 0
     apply()
   })
-  const btnClose = modalBtn('close', t('mermaid.close'), t('mermaid.close'), closeZoom)
+  const btnClose = modalBtn('close', 'Close', 'Close', closeZoom)
   bar.append(btnOut, scaleLabel, btnIn, btnReset, btnClose)
 
   stage.addEventListener(
@@ -316,11 +315,11 @@ function openZoom(diagram, trigger) {
   document.body.style.overflow = 'hidden'
 
   const updateLabels = () => {
-    backdrop.setAttribute('aria-label', t('mermaid.dialogLabel'))
-    btnIn.setAttribute('aria-label', t('mermaid.zoomIn'))
-    btnOut.setAttribute('aria-label', t('mermaid.zoomOut'))
-    btnReset.textContent = t('mermaid.reset')
-    btnClose.textContent = t('mermaid.close')
+    backdrop.setAttribute('aria-label', 'Diagram preview')
+    btnIn.setAttribute('aria-label', 'Zoom in')
+    btnOut.setAttribute('aria-label', 'Zoom out')
+    btnReset.textContent = 'Reset'
+    btnClose.textContent = 'Close'
   }
   updateLabels()
 
@@ -353,18 +352,4 @@ function modalBtn(act, text, ariaLabel, onClick) {
 function closeZoom() {
   activeModal?.teardown()
   activeModal = null
-}
-
-// Mermaid elements are created outside React, so their labels are synced manually when the language changes.
-if (typeof document !== 'undefined') {
-  onLangChange(() => {
-    for (const figure of document.querySelectorAll('.mermaid-block')) {
-      const toggle = figure.querySelector('.mermaid-toggle')
-      if (toggle) toggle.textContent = t(figure.dataset.view === 'source' ? 'mermaid.hideSource' : 'mermaid.showSource')
-      const zoomBtn = figure.querySelector('.mermaid-zoom-btn')
-      if (zoomBtn) zoomBtn.textContent = t('mermaid.zoom')
-    }
-    for (const note of document.querySelectorAll('.mermaid-note')) note.textContent = t('mermaid.failed')
-    activeModal?.updateLabels()
-  })
 }

@@ -3,7 +3,6 @@ import { docHref, dirHref } from '../router.js'
 import { countFilesRecursive, findRootReadme, orderForIndex } from '../tree.js'
 import { countLabel, formatBytes } from '../format.js'
 import IndexRow from '../components/IndexRow.jsx'
-import { t } from '../i18n.js'
 
 // Alias route `#/a/contents`: full table of contents for the entire base.
 // Derived from the server-filtered tree (entries ignored in map.json never
@@ -20,17 +19,17 @@ export default function Contents() {
   return (
     <article className="folder">
       <header className="folder-head">
-        <h1 className="folder-title">{t('home.contents')}</h1>
+        <h1 className="folder-title">Contents</h1>
         <p className="folder-meta">
-          <span>{countLabel(meta.files, t('home.files'))}</span>
-          <span>{countLabel(meta.dirs, t('home.folders'))}</span>
+          <span>{countLabel(meta.files, 'files')}</span>
+          <span>{countLabel(meta.dirs, 'folders')}</span>
         </p>
       </header>
 
       {sections.length > 0 && (
         <section aria-labelledby="contents-sections-heading">
           <h2 className="section-head" id="contents-sections-heading">
-            {t('folder.sections')}
+            Sections
           </h2>
           <div className="index-list">
             {sections.map((dir) => (
@@ -43,7 +42,7 @@ export default function Contents() {
       {documents.length > 0 && (
         <section aria-labelledby="contents-docs-heading">
           <h2 className="section-head" id="contents-docs-heading">
-            {t('folder.documents')}
+            Documents
           </h2>
           <div className="index-list">
             {documents.map((file) => (
@@ -64,7 +63,7 @@ function DirBranch({ node }) {
         node={node}
         href={dirHref(node.path)}
         mono
-        meta={countLabel(count, t('home.files'))}
+        meta={countLabel(count, 'files')}
         muted={count === 0}
       />
       {node.children.length > 0 && (

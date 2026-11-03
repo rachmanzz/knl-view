@@ -8,7 +8,6 @@ import Breadcrumb from '../components/Breadcrumb.jsx'
 import IndexRow from '../components/IndexRow.jsx'
 import Markdown from '../components/Markdown.jsx'
 import { EmptyState, ErrorState, Loading } from '../components/States.jsx'
-import { t } from '../i18n.js'
 
 export default function FolderView({ route }) {
   const { version } = useKnowledge()
@@ -41,11 +40,11 @@ export default function FolderView({ route }) {
     return (
       <article className="folder">
         <ErrorState
-          title={t('folder.notFound')}
-          detail={t('folder.notFoundDetail').replace('{path}', route.path)}
+          title="Folder not found."
+          detail={`Folder "${route.path}" not found in knowledge base.`}
         >
           <a className="btn" href="#/">
-            {t('app.backHome')}
+            Back to home
           </a>
         </ErrorState>
       </article>
@@ -65,17 +64,17 @@ export default function FolderView({ route }) {
           <span className="mono">{node.name}/</span>
         </h1>
         <p className="folder-meta">
-          <span>{countLabel(countFilesRecursive(node), t('home.files'))}</span>
+          <span>{countLabel(countFilesRecursive(node), 'files')}</span>
           <span>
-            {t('doc.updated')} {formatDateTime(subtreeMtime(node))}
+            updated {formatDateTime(subtreeMtime(node))}
           </span>
         </p>
       </header>
 
-      {readme.status === 'loading' && <Loading label={t('folder.loadingReadme')} />}
+      {readme.status === 'loading' && <Loading label="Loading folder README..." />}
       {readme.status === 'error' && (
         <p className="inline-note" role="status">
-          {t('folder.readmeFailed')} {readme.error}
+          Failed to load folder README: {readme.error}
         </p>
       )}
       {readme.status === 'ready' && <Markdown source={readme.content} baseDir={route.path} />}
@@ -83,14 +82,14 @@ export default function FolderView({ route }) {
       {isEmpty && (
         <EmptyState
           level={2}
-          title={`${t('folder.empty')} ${node.name}/`}
-          detail={t('folder.noFiles')}
+          title={`$Empty folder ${node.name}/`}
+          detail="No files or subfolders."
         >
           <button type="button" className="btn" onClick={() => window.location.reload()}>
-            {t('folder.reload')}
+            Reload page
           </button>
           <a className="btn btn-plain" href="#/">
-            {t('app.backHome')}
+            Back to home
           </a>
         </EmptyState>
       )}
@@ -98,7 +97,7 @@ export default function FolderView({ route }) {
       {files.length > 0 && (
         <section aria-labelledby="folder-files-heading">
           <h2 className="section-head" id="folder-files-heading">
-            {t('folder.files')}
+            Files
           </h2>
           <div className="index-list">
             {files.map((file) => (
@@ -117,7 +116,7 @@ export default function FolderView({ route }) {
       {dirs.length > 0 && (
         <section aria-labelledby="folder-dirs-heading">
           <h2 className="section-head" id="folder-dirs-heading">
-            {t('folder.subfolders')}
+            Subfolders
           </h2>
           <div className="index-list">
             {dirs.map((dir) => (
@@ -126,7 +125,7 @@ export default function FolderView({ route }) {
                 node={dir}
                 href={dirHref(dir.path)}
                 mono
-                meta={countLabel(countFilesRecursive(dir), t('home.files'))}
+                meta={countLabel(countFilesRecursive(dir), 'files')}
                 muted={countFilesRecursive(dir) === 0}
               />
             ))}

@@ -1,9 +1,9 @@
-import { getLang } from './i18n.js'
-
+// Display formatting helpers. The viewer UI is English-only, so dates and
+// sizes use one fixed locale (en-GB) and a period decimal separator.
 const formatters = new Map()
 
 function formatter(kind) {
-  const locale = getLang() === 'id' ? 'id-ID' : 'en-GB'
+  const locale = 'en-GB'
   const key = `${kind}:${locale}`
   if (!formatters.has(key)) {
     formatters.set(
@@ -37,8 +37,7 @@ export function formatBytes(bytes) {
     unit += 1
   }
   const digits = value < 10 ? 1 : 0
-  const decimal = getLang() === 'id' ? ',' : '.'
-  return `${value.toFixed(digits).replace('.', decimal)} ${units[unit]}`
+  return `${value.toFixed(digits)} ${units[unit]}`
 }
 
 export function countLabel(count, word) {

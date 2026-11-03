@@ -7,7 +7,6 @@ import { countLabel, formatBytes, formatDateTime, formatDate } from '../format.j
 import IndexRow from '../components/IndexRow.jsx'
 import { EmptyState } from '../components/States.jsx'
 import Markdown from '../components/Markdown.jsx'
-import { t } from '../i18n.js'
 import { displayLabel } from '../label.js'
 
 export default function Home() {
@@ -44,13 +43,13 @@ export default function Home() {
   return (
     <section className="home">
       <header className="masthead">
-        <p className="eyebrow">{t('home.knowledgeBase')}</p>
+        <p className="eyebrow">Knowledge base</p>
         <h1>{meta.map?.title || readme?.title || meta.name}</h1>
         <p className="masthead-meta">
-          <span>{countLabel(meta.files, t('home.files'))}</span>
-          <span>{countLabel(meta.dirs, t('home.folders'))}</span>
+          <span>{countLabel(meta.files, 'files')}</span>
+          <span>{countLabel(meta.dirs, 'folders')}</span>
           <span>
-            {t('home.lastUpdated')} {formatDateTime(meta.newest)}
+            last updated {formatDateTime(meta.newest)}
           </span>
         </p>
       </header>
@@ -58,7 +57,7 @@ export default function Home() {
       {readmeContent && (
         <section className="home-readme" aria-labelledby="home-readme-heading">
           <h2 className="section-head" id="home-readme-heading">
-            {t('home.contents')}
+            Contents
           </h2>
           <Markdown source={readmeContent} baseDir="" />
         </section>
@@ -67,20 +66,20 @@ export default function Home() {
       <div className="home-grid">
         <section aria-labelledby="home-index-heading">
           <h2 className="section-head" id="home-index-heading">
-            {t('home.toc')}
+            Table of contents
           </h2>
 
           {tree.length === 0 && (
             <EmptyState
               level={2}
-              title={t('home.emptyArchive')}
-              detail={`${t('home.noContent')} ${meta.root}`}
+              title="Empty archive"
+              detail={`$No content yet. ${meta.root}`}
             />
           )}
 
           {sections.length > 0 && (
             <div className="index-group">
-              <p className="group-label">{t('folder.sections')}</p>
+              <p className="group-label">Sections</p>
               <div className="index-list">
                 {sections.map((dir) => (
                   <div key={dir.path} className="index-branch">
@@ -88,7 +87,7 @@ export default function Home() {
                       node={dir}
                       href={dirHref(dir.path)}
                       mono
-                      meta={countLabel(countFilesRecursive(dir), t('home.files'))}
+                      meta={countLabel(countFilesRecursive(dir), 'files')}
                       muted={countFilesRecursive(dir) === 0}
                     />
                     {dir.children.length > 0 && (
@@ -108,7 +107,7 @@ export default function Home() {
                               node={child}
                               href={dirHref(child.path)}
                               mono
-                              meta={countLabel(countFilesRecursive(child), t('home.files'))}
+                              meta={countLabel(countFilesRecursive(child), 'files')}
                               muted={countFilesRecursive(child) === 0}
                             />
                           )
@@ -123,7 +122,7 @@ export default function Home() {
 
           {documents.length > 0 && (
             <div className="index-group">
-              <p className="group-label">{t('folder.documents')}</p>
+              <p className="group-label">Documents</p>
               <div className="index-list">
                 {documents.map((file) => (
                   <IndexRow
@@ -141,10 +140,10 @@ export default function Home() {
 
         <section className="home-recent" aria-labelledby="home-recent-heading">
           <h2 className="section-head" id="home-recent-heading">
-            {t('home.recentlyChanged')}
+            Recently changed
           </h2>
           {recent.length === 0 ? (
-            <p className="nav-note">{t('home.noContent')}</p>
+            <p className="nav-note">No content yet.</p>
           ) : (
             <ol className="recent-list">
               {recent.map((file) => (

@@ -8,7 +8,6 @@ import FolderView from './views/FolderView.jsx'
 import DocView from './views/DocView.jsx'
 import Contents from './views/Contents.jsx'
 import { ErrorState, Loading } from './components/States.jsx'
-import { onLangChange, getLang, t } from './i18n.js'
 
 // A README file serves as the folder index. Opening it directly displays
 // identically to opening that folder: the route remains the file route
@@ -38,8 +37,6 @@ function Shell() {
   const { status, error, meta, notice, reload } = useKnowledge()
   const index = useKnowledgeIndex()
   const [navOpen, setNavOpen] = useState(false)
-  const [lang, setLangState] = useState(getLang())
-  useEffect(() => onLangChange(() => setLangState(getLang())), [])
   const [reloading, setReloading] = useState(false)
   const toggleRef = useRef(null)
   const hadOpen = useRef(false)
@@ -74,12 +71,12 @@ function Shell() {
   }, [navOpen])
 
   const title = useMemo(() => {
-    if (route.view === 'home') return t('app.home')
-    if (route.view === 'alias') return t('home.contents')
-    if (route.view === 'notfound') return t('states.pageNotFound')
+    if (route.view === 'home') return 'Home'
+    if (route.view === 'alias') return 'Contents'
+    if (route.view === 'notfound') return 'Page not found.'
     const node = index?.nodes.get(route.path)
     return node?.title || node?.name || route.path
-  }, [route, index, lang])
+  }, [route, index])
 
   useEffect(() => {
     document.title = `${title} · knl-view`
@@ -101,7 +98,7 @@ function Shell() {
   return (
     <>
       <a className="skip" href="#content" onClick={skipToContent}>
-        {t('app.skip')}
+        Skip to content
       </a>
 
       <div className="shell">
@@ -120,15 +117,15 @@ function Shell() {
 
           {notice && (
             <p className="banner" role="status">
-              {t('app.indexReloadFailed')} {notice}
+              Index reload failed: {notice}
             </p>
           )}
 
           <main id="content" className="content" tabIndex={-1}>
-            {status === 'loading' && <Loading label={t('states.loadingIndex')} />}
+            {status === 'loading' && <Loading label="Loading file index..." />}
 
             {status === 'error' && (
-              <ErrorState title={t('states.indexFailed')} detail={`${error} ${t('states.indexHint')}`}>
+              <ErrorState title="Index failed to load." detail={`${error} Make sure knl-view is running, then try again.`}>
                 <button type="button" className="btn" onClick={onReload}>
                   Retry
                 </button>
@@ -142,11 +139,11 @@ function Shell() {
 
             {status === 'ready' && route.view === 'notfound' && (
               <ErrorState
-                title={t('states.pageNotFound')}
-                detail={t('states.routeUnknown').replace('{path}', route.path)}
+                title="Page not found."
+                detail={`Route "${route.path}" is not recognized by the viewer.`}
               >
                 <a className="btn" href="#/">
-                  {t('app.backHome')}
+                  Back to home
                 </a>
               </ErrorState>
             )}

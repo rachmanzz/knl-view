@@ -1,6 +1,5 @@
 import { useKnowledge } from '../knowledge.jsx'
 import { dirHref } from '../router.js'
-import { t } from '../i18n.js'
 
 export default function Breadcrumb({ kind, path }) {
   const { meta } = useKnowledge()
@@ -16,7 +15,7 @@ export default function Breadcrumb({ kind, path }) {
   })
 
   return (
-    <nav className="crumbs" aria-label={t('app.fileLocation')}>
+    <nav className="crumbs" aria-label="File location">
       <ol>
         {crumbs.map((crumb, i) => (
           <li key={`${crumb.label}-${i}`}>

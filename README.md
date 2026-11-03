@@ -36,7 +36,6 @@ knl-view --port 8086 --path=.knowledges
 - Markdown with GFM tables, and triple-backtick fences tagged `mermaid` rendered as diagrams. The mermaid bundle is served locally and loaded only when a document contains a diagram; nothing is fetched from a CDN.
 - Per-diagram controls: toggle between diagram and source, and a zoom modal (wheel zoom, drag to pan, +/−/Reset, Esc to close).
 - Table of contents per document, breadcrumb, and a filter box in the sidebar that narrows the index by file title or path.
-- Interface in English or Indonesian, switchable in the top bar. English is the default.
 - Whole-project dependency and symbol call graph extraction via WebAssembly Tree-Sitter for JavaScript, TypeScript, Go, Python, and Rust.
 
 ## How to Set Up
