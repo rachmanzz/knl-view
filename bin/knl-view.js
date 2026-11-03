@@ -135,9 +135,12 @@ Options:
   --structure <layout>    Layout for non-interactive --init:
                           standard | empty | custom (default: standard)
   --folders <a,b,c>       Folder names for --structure=custom
-  --seed-skill=knl-view   Write the OpenCode "knl-view" skill (skipped if it already exists)
+  --seed-skill=knl-view   Write or update the knl-view skill for coding agents;
+                          an existing copy whose content differs is updated in
+                          place, and existing global copies are synced too
   --dir <location>        Skill location: project (.agents/skills) | global
-                          (~/.config/opencode/skills). Default: project
+                          (first existing of ~/.config/opencode/skills,
+                          ~/.agents/skills, ~/.codex/skills). Default: project
   --yes, -y               Use all default answers, no prompting
   --help, -h              Show this help
   --version, -v           Show version

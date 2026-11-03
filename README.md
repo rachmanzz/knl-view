@@ -54,7 +54,7 @@ npx @rahmantech/knl-view setup
 
 ### What `knl-view setup` Does Automatically
 1. **Scaffolds `.knowledges/`**: Creates the documentation directory with a starter `README.md` index and template folders (or custom folders via `--folders`).
-2. **Installs Agent Skills**: Automatically places the `knl-view` skill into `.agents/skills/knl-view/` so coding agents (Antigravity, Claude, Codex, OpenCode) can read and manage your knowledge base.
+2. **Installs Agent Skills**: Writes the `knl-view` skill into `.agents/skills/knl-view/` (updating it in place when its content differs) and syncs any existing global skill copies (`~/.config/opencode/skills`, `~/.agents/skills`, `~/.codex/skills`), so coding agents (Antigravity, Claude, Codex, OpenCode) can read and manage your knowledge base.
 3. **Integrates Decision History**: Audits and offers to install the `decision-history` skill ([decisionskills](https://github.com/rachmanzz/decisionskills)) for append-only architecture decision tracking.
 4. **Protects Configuration**: Ensures `.gitignore` includes `.knowledges/` and `knl-config.json`.
 5. **Auto-maps AnchorDB Models**: Configures `knowledges` and `sources` model identifiers in `knl-config.json` and records them in the machine-wide registry.
@@ -132,8 +132,8 @@ knl-view --seed-skill=knl-view --dir=global --yes
 | `--init` | off | Scaffold a new base interactively; does not start the server |
 | `--structure` | `standard` | Layout for a non-interactive `--init`: `standard`, `empty`, or `custom` |
 | `--folders` | none | Comma-separated folder names for `--structure=custom` |
-| `--seed-skill=knl-view` | off | Write the `knl-view` skill for coding agents; skipped if it already exists |
-| `--dir` | `project` | Skill location: `project` (`.agents/skills`) or `global` (`~/.config/opencode/skills`) |
+| `--seed-skill=knl-view` | off | Write the `knl-view` skill for coding agents; an existing copy whose content differs is updated in place |
+| `--dir` | `project` | Skill location: `project` (`.agents/skills`) or `global` (first existing of `~/.config/opencode/skills`, `~/.agents/skills`, `~/.codex/skills`) |
 | `--yes`, `-y` | off | Accept every default in `--init` / `--seed-skill`, no questions asked |
 | `--help`, `-h` | | Show help |
 | `--version`, `-v` | | Show version |
@@ -319,7 +319,7 @@ When `knl-view` is running as a local server:
 | OS | Core Viewer (`knl-view`) | Global Config Location | AnchorDB Backend |
 | --- | --- | --- | --- |
 | **Linux** | Native (Node.js >= 20.19) | `~/.knlview/knl-config.json` | **Native Binary** (`amd64`, `arm64`) or Container |
-| **macOS** | Native (Node.js >= 20.19) | `~/.knlview/knl-config.json` | **Container**: **Podman (Recommended)** or Docker |
+| **macOS** | Native (Node.js >= 20.19) | `~/.knlview/knl-config.json` | **Native Binary** (`amd64`, `arm64`) or Container |
 | **Windows** | Native (Node.js >= 20.19) | `%APPDATA%\knlview\knl-config.json` | **Container**: **Podman (Recommended)** or Docker |
 
 ---
@@ -331,18 +331,17 @@ AnchorDB is an optional layer. Without it, the viewer runs 100% locally with zer
 Run `knl-view install anchordb` to install AnchorDB and write the `anchordb` block into your global configuration:
 
 #### 1. Linux (Native Standalone Binary)
-- Native binaries are published on [GitHub Releases](https://github.com/rachmanzz/anchordb/releases) for Linux architectures:
-  - `linux_amd64` (x86_64)
-  - `linux_arm64` (aarch64)
-- On Linux, `knl-view install anchordb` automatically:
+- Native binaries are published on [GitHub Releases](https://github.com/rachmanzz/anchordb/releases) for Linux and macOS architectures:
+  - `linux_amd64` (x86_64), `linux_arm64` (aarch64)
+  - `darwin_amd64` (Intel), `darwin_arm64` (Apple Silicon)
+- On Linux and macOS, `knl-view install anchordb` automatically:
   - Fetches the latest release asset and verifies it against the official `SHA256SUMS.txt`.
   - Installs `anchordb-server` and `anchordb` into `~/.knlview/bin/` with secure file permissions (`0o700` / `0o755`).
   - Starts `anchordb-server` detached as a background process daemon (logs in `~/.knlview/anchordb.log`, data in `~/.knlview/anchordb-data`).
-- You can also explicitly opt for containers on Linux using `--method=container`.
+- You can also explicitly opt for containers on Linux and macOS using `--method=container`.
 
-#### 2. Windows & macOS (Container via Podman or Docker)
-- AnchorDB relies on Linux kernel primitives (`mmap` memory mapping and POSIX file locking). Native binaries are not yet published for Windows or macOS.
-- For Windows and macOS, AnchorDB is currently deployed via a lightweight container image (`ghcr.io/rachmanzz/anchordb`):
+#### 2. Windows (Container via Podman or Docker)
+- For Windows, AnchorDB is currently deployed via a lightweight container image (`ghcr.io/rachmanzz/anchordb`):
   - **Podman (Recommended)**: Rootless, daemonless, lightweight, and requires no administrative privileges or background daemons.
   - **Docker**: Supported via Docker Desktop or Docker Engine (`--runtime=docker`).
 - `knl-view install anchordb` automatically detects installed container runtimes. If both are found, it prompts you to select **Podman (Recommended)** or **Docker**. If neither is installed, it halts with clear installation guidance.
