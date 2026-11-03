@@ -373,7 +373,7 @@ Two optional config files. A missing file is never an error; a broken file is ig
     "url": "wire://127.0.0.1:17448",
     "token": "your-token",
     "sync": true,
-    "deamon": "podman",
+    "daemon": "podman",
     "container_name": "anchordb-knlview",
     "container_id": "56519e7acbaa...",
     "container_created_on": "2026-10-31 14:08:48..."

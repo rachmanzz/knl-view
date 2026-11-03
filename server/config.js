@@ -216,11 +216,10 @@ export function normalizeAnchordb(raw) {
     const relations = raw.relations.map((r) => cleanString(r)).filter(Boolean)
     if (relations.length) anchordb.relations = relations
   }
+  // Read both spellings: configs written before the "deamon" rename keep
+  // working, and the next config write migrates them to the corrected key.
   const daemon = cleanString(raw.daemon || raw.deamon)
-  if (daemon) {
-    anchordb.daemon = daemon
-    anchordb.deamon = daemon
-  }
+  if (daemon) anchordb.daemon = daemon
   const containerName = cleanString(raw.container_name)
   if (containerName) anchordb.container_name = containerName
   const containerId = cleanString(raw.container_id)

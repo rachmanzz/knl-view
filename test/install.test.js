@@ -97,14 +97,14 @@ describe('mergeGlobalAnchordb', () => {
       url: 'wire://127.0.0.1:7448',
       token: 't-daemon',
       sync: true,
-      deamon: 'podman',
+      daemon: 'podman',
       container_name: 'anchordb-knlview',
       container_id: 'podman-id-abc',
       container_created_on: '2026-10-31T12:00:00Z'
     })
 
     const raw = JSON.parse(fs.readFileSync(path.join(home, '.knlview', 'knl-config.json'), 'utf8'))
-    assert.equal(raw.anchordb.deamon, 'podman')
+    assert.equal(raw.anchordb.daemon, 'podman')
     assert.equal(raw.anchordb.container_name, 'anchordb-knlview')
     assert.equal(raw.anchordb.container_id, 'podman-id-abc')
     assert.equal(raw.anchordb.container_created_on, '2026-10-31T12:00:00Z')
@@ -164,7 +164,6 @@ describe('detectRunningDaemon', () => {
     const meta = await detectRunningDaemon(mockExec)
     assert.deepEqual(meta, {
       daemon: 'podman',
-      deamon: 'podman',
       container_name: 'anchordb-knlview',
       container_id: 'podman-cid-999',
       container_created_on: '2026-10-31T10:00:00Z',
@@ -182,7 +181,7 @@ describe('detectRunningDaemon', () => {
     }
 
     const meta = await detectRunningDaemon(mockExec)
-    assert.deepEqual(meta, { daemon: 'binary', deamon: 'binary' })
+    assert.deepEqual(meta, { daemon: 'binary' })
   })
 
   test('returns null when neither container nor binary is active', async () => {

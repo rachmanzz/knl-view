@@ -228,7 +228,7 @@ describe('normalizeAnchordb', () => {
     })
   })
 
-  test('keeps daemon and container metadata when present', () => {
+  test('maps the legacy "deamon" spelling to "daemon" on read', () => {
     const a = normalizeAnchordb({
       url: 'wire://127.0.0.1:7448',
       deamon: 'docker',
@@ -236,7 +236,8 @@ describe('normalizeAnchordb', () => {
       container_id: 'c-12345',
       container_created_on: '2026-10-31T10:00:00Z'
     })
-    assert.equal(a.deamon, 'docker')
+    assert.equal(a.daemon, 'docker')
+    assert.equal(a.deamon, undefined)
     assert.equal(a.container_name, 'anchordb-knlview')
     assert.equal(a.container_id, 'c-12345')
     assert.equal(a.container_created_on, '2026-10-31T10:00:00Z')

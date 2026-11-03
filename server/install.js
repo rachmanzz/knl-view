@@ -424,7 +424,6 @@ export async function detectRunningDaemon(exec) {
   if (container.exists && container.running && container.valid) {
     return {
       daemon: container.runtime,
-      deamon: container.runtime,
       container_name: container.name,
       container_id: container.id,
       container_created_on: container.created,
@@ -437,7 +436,7 @@ export async function detectRunningDaemon(exec) {
   try {
     const { stdout } = await exec('pgrep', ['-f', 'anchordb-server'])
     if (stdout.trim()) {
-      return { daemon: 'binary', deamon: 'binary' }
+      return { daemon: 'binary' }
     }
   } catch {}
 

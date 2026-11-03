@@ -628,15 +628,14 @@ async function runSetupCommand({ values, settings, projectConfig, globalConfig }
             url: `wire://127.0.0.1:${daemonMeta.wire_port || WIRE_PORT_DEFAULT}`,
             token: daemonMeta.token || currentGlobalConfig?.anchordb?.token || '',
             sync: currentGlobalConfig?.anchordb?.sync !== false,
-            daemon: daemonMeta.daemon || daemonMeta.deamon,
-            deamon: daemonMeta.daemon || daemonMeta.deamon,
+            daemon: daemonMeta.daemon,
             container_name: daemonMeta.container_name,
             container_id: daemonMeta.container_id,
             container_created_on: daemonMeta.container_created_on
           }
           await mergeGlobalAnchordb(home, updatedAnchor)
           currentGlobalConfig = { ...currentGlobalConfig, anchordb: updatedAnchor }
-          process.stdout.write(`  [info] global config updated with ${daemonMeta.daemon || daemonMeta.deamon} daemon metadata\n`)
+          process.stdout.write(`  [info] global config updated with ${daemonMeta.daemon} daemon metadata\n`)
         }
       }
     } else if (!daemonMeta && !containerStatus.exists) {
@@ -663,11 +662,10 @@ async function runSetupCommand({ values, settings, projectConfig, globalConfig }
 
     if (daemonMeta && currentGlobalConfig?.anchordb) {
       const existing = currentGlobalConfig.anchordb
-      const daemonType = daemonMeta.daemon || daemonMeta.deamon || existing.daemon || existing.deamon
+      const daemonType = daemonMeta.daemon || existing.daemon
       const updated = {
         ...existing,
-        daemon: daemonType,
-        deamon: daemonType
+        daemon: daemonType
       }
       if (daemonMeta.container_name) updated.container_name = daemonMeta.container_name
       if (daemonMeta.container_id) updated.container_id = daemonMeta.container_id
@@ -858,7 +856,7 @@ async function runAnchordbCommand(action) {
 
   if (action === 'status') {
     if (daemonMeta) {
-      process.stdout.write(`AnchorDB: running (${daemonMeta.daemon || daemonMeta.deamon})\n`)
+      process.stdout.write(`AnchorDB: running (${daemonMeta.daemon})\n`)
       process.stdout.write(`  wire   wire://127.0.0.1:${runningWirePort}\n`)
       process.stdout.write(`  HTTP   http://127.0.0.1:${runningHttpPort}/health\n`)
       if (daemonMeta.container_name) process.stdout.write(`  container ${daemonMeta.container_name}\n`)
@@ -879,7 +877,7 @@ async function runAnchordbCommand(action) {
 
   if (action === 'start') {
     if (daemonMeta) {
-      process.stdout.write(`AnchorDB is already running (${daemonMeta.daemon || daemonMeta.deamon}).\n`)
+      process.stdout.write(`AnchorDB is already running (${daemonMeta.daemon}).\n`)
       process.stdout.write(`  wire   wire://127.0.0.1:${runningWirePort}\n`)
       process.stdout.write(`  HTTP   http://127.0.0.1:${runningHttpPort}/health\n`)
       return
@@ -911,7 +909,6 @@ async function runAnchordbCommand(action) {
         token,
         sync: anchordb?.sync !== false,
         daemon: 'binary',
-        deamon: 'binary',
         wire_port: wirePort,
         http_port: httpPort
       }
@@ -1147,7 +1144,7 @@ async function runInstallCommand(target, { values, rl: externalRl = null }) {
     url: `wire://127.0.0.1:${wirePort}`,
     token,
     sync: true,
-    deamon: daemonType,
+    daemon: daemonType,
     wire_port: wirePort,
     http_port: httpPort
   }
