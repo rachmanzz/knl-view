@@ -50,19 +50,72 @@ export async function scaffoldBase({ root, structure, folders = [] }) {
   return actions
 }
 
-export async function seedSkill({ scope, cwd, home = process.env.HOME, xdgConfig = process.env.XDG_CONFIG_HOME }) {
-  const base =
-    scope === 'global'
-      ? path.join(xdgConfig || path.join(home, '.config'), 'opencode', 'skills')
-      : path.join(cwd, '.agents', 'skills')
-  const target = path.join(base, SKILL_ID, 'SKILL.md')
+export async function seedSkill({
+  scope = 'project',
+  cwd = process.cwd(),
+  home = process.env.HOME,
+  xdgConfig = process.env.XDG_CONFIG_HOME,
+  syncGlobal = false
+} = {}) {
+  const globalCandidates = [
+    path.join(xdgConfig || path.join(home || '', '.config'), 'opencode', 'skills', SKILL_ID, 'SKILL.md'),
+    path.join(home || '', '.agents', 'skills', SKILL_ID, 'SKILL.md'),
+    path.join(home || '', '.codex', 'skills', SKILL_ID, 'SKILL.md')
+  ]
 
-  const exists = await statOrNull(target)
-  if (exists) return { path: target, status: 'skipped' }
+  let target
+  if (scope === 'global') {
+    // Check whether an existing global skill already exists in any candidate
+    // directory so no duplicate skill gets seeded.
+    let existingGlobal = null
+    for (const cand of globalCandidates) {
+      const st = await statOrNull(cand)
+      if (st && st.isFile()) {
+        existingGlobal = cand
+        break
+      }
+    }
+    // Update existing if present, otherwise seed to primary standard location
+    target = existingGlobal || globalCandidates[0]
+  } else {
+    target = path.join(cwd, '.agents', 'skills', SKILL_ID, 'SKILL.md')
+  }
 
-  await fs.mkdir(path.dirname(target), { recursive: true })
-  await fs.writeFile(target, SKILL_MD, 'utf8')
-  return { path: target, status: 'created' }
+  let status = 'skipped'
+  const stat = await statOrNull(target)
+  if (stat && stat.isFile()) {
+    const existingContent = await fs.readFile(target, 'utf8')
+    if (existingContent !== SKILL_MD) {
+      await fs.writeFile(target, SKILL_MD, 'utf8')
+      status = 'updated'
+    } else {
+      status = 'skipped'
+    }
+  } else {
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    await fs.writeFile(target, SKILL_MD, 'utf8')
+    status = 'created'
+  }
+
+  // Update existing global skills in-place if requested, without creating duplicates
+  const updatedGlobals = []
+  if (syncGlobal || scope === 'both') {
+    for (const cand of globalCandidates) {
+      if (cand === target) continue
+      const st = await statOrNull(cand)
+      if (st && st.isFile()) {
+        const cur = await fs.readFile(cand, 'utf8')
+        if (cur !== SKILL_MD) {
+          await fs.writeFile(cand, SKILL_MD, 'utf8')
+          updatedGlobals.push({ path: cand, status: 'updated' })
+        } else {
+          updatedGlobals.push({ path: cand, status: 'skipped' })
+        }
+      }
+    }
+  }
+
+  return { path: target, status, updatedGlobals }
 }
 
 export async function ensureGitignore({ cwd }) {
@@ -91,7 +144,17 @@ export function buildAgentInstructionBlock(hasGraphify = false) {
   return `<!-- knl-view:start -->
 # Knowledge graph tools
 - KNL-View is the primary graph tool. For \`.knowledges\`, source graphs, external module graphs, and project graph questions, read the project's \`knl-view\` skill and use the relevant KNL-View feature first.
-${fallback}## KNL-View graph access
+${fallback}## Strict Anti-Grep & Mandatory Trace-Before-Edit Protocol (Universal Enforcement)
+- **STRICT BAN ON AD-HOC GREP/FIND FOR CODE DISCOVERY**:
+  - STRICTLY FORBIDDEN to use \`grep\`, \`ripgrep\` (\`rg\`), or \`find\` to trace symbols, callers, callees, definitions, or internal codebase dependencies.
+  - Every relation lookup, caller function, callee function, and internal dependency MUST use \`knl-view sources trace --target=<path>#<symbol>\` or \`knl-view sources trace --target=<path>\`.
+  - \`grep\`/\`find\` is ONLY permitted for literal text searches (e.g. searching exact error messages, literal UI strings, or config keys/values), NEVER for navigating code or architecture.
+- **MANDATORY THREE-PHASE KNL-VIEW WORKFLOW**:
+  1. **Pre-Edit Exploration (MANDATORY)**: Run \`knl-view sources trace --target=<path>\` (file lineage) or \`knl-view sources trace --target=<path>#<symbol>\` (call hierarchy) BEFORE touching or modifying files.
+  2. **Deliberate Batch Edit**: Apply changes based strictly on semantic graph relationships mapped by KNL-View.
+  3. **Post-Edit State Synchronization (MANDATORY)**: Run \`knl-view sources sync\` immediately after all file edits and test runs are complete.
+
+## KNL-View graph access
 - Use the KNL-View feature that fits the task (\`graph trace\`, \`sources trace/sync/collect\`, \`modules build-graph/trace/list\`, \`model check/new\`, consensus commands, or the viewer). Do not approximate a supported KNL-View operation with ad-hoc graph queries.
 - For third-party libraries and dependencies (\`node_modules\`, \`go mod\`, \`site-packages\`, \`crates\`): NEVER read raw library files directly. Build and query the module graph on-demand: run \`knl-view modules build-graph <eco>::<module_name>\` (e.g. \`npm::express\`, \`go::github.com/gin-gonic/gin\`), then inspect API definitions and call hierarchies via \`knl-view modules trace <eco>::<module_name> [symbol]\` to save context tokens.
 - Route all graph reads and writes through KNL-View's documented CLI, viewer, or application endpoints. Never connect to AnchorDB directly through AnchorWire, its CLI, direct database endpoints, files, SQL, or custom clients/scripts. If KNL-View cannot perform a requested operation, explain the limitation; do not bypass it.
@@ -106,6 +169,14 @@ export function stripLegacyKnlInstructions(text) {
   cleaned = cleaned.replace(/<!--\s*knl-view:(?:start|end)\s*-->/g, '\n')
   cleaned = cleaned.replace(
     /(?:^|\n)# Knowledge graph tools[\s\S]*?(?=(?:\n#+\s)|$)/g,
+    '\n'
+  )
+  cleaned = cleaned.replace(
+    /(?:^|\n)## Strict Anti-Grep[\s\S]*?(?=(?:\n#+\s)|$)/g,
+    '\n'
+  )
+  cleaned = cleaned.replace(
+    /(?:^|\n)## KNL-View hard constraints[\s\S]*?(?=(?:\n#+\s)|$)/g,
     '\n'
   )
   cleaned = cleaned.replace(
@@ -205,6 +276,17 @@ description: Read and maintain .knowledges knowledge bases, project source depen
 A \`.knowledges\` folder is a plain-directory knowledge base, viewed with
 knl-view. The disk is the source of truth: files and folders exist because
 they exist on disk, never because a map says so.
+
+## Hard Negative Constraints (Mandatory Rules)
+
+- **STRICTLY FORBIDDEN to use grep/ripgrep/find for tracing symbols, callers, or internal codebase dependencies.**
+  Every relation lookup, caller function, callee function, and internal dependency MUST use \`knl-view sources trace --target=<path>#<symbol>\` or \`knl-view sources trace --target=<path>\`. AI agents are strictly prohibited from defaulting back to \`grep -rn\` or \`find\` when tracing architecture or symbols. \`grep\`/\`find\` is permitted ONLY for literal text searches (e.g. exact error messages, literal UI strings, or config values), NEVER for mapping code relations or blast radius.
+- **STRICTLY FORBIDDEN to inspect raw third-party dependency files directly.**
+  For third-party dependencies (\`node_modules\`, \`go mod\`, \`site-packages\`, \`crates\`), never read raw library files directly. Build the module graph on-demand: \`knl-view modules build-graph <eco>::<module_name>\` and query API definitions and call hierarchies via \`knl-view modules trace <eco>::<module_name> [symbol]\` to save context tokens.
+- **STRICTLY FORBIDDEN to bypass KNL-View via direct AnchorWire/AnchorDB connections.**
+  All graph reads and writes must strictly route through official \`knl-view\` CLI commands, the viewer, or application endpoints.
+- **MANDATORY Trace-Before-Edit & Sync-After-Change.**
+  Always run \`knl-view sources trace\` before editing files to inspect the blast radius. Always run \`knl-view sources sync\` immediately after modifying, adding, or deleting project files.
 
 ## Read in this order
 

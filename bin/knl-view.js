@@ -459,13 +459,10 @@ async function runSetup() {
     }
 
     if (seedScope) {
-      const result = await seedSkill({ scope: seedScope, cwd: process.cwd() })
+      const result = await seedSkill({ scope: seedScope, cwd: process.cwd(), syncGlobal: true })
       const scope = seedScope === 'global' ? 'global' : 'project'
-      process.stdout.write(
-        result.status === 'skipped'
-          ? `  skip     skill already exists: ${result.path}\n`
-          : `  create   skill (${scope}): ${result.path}\n`
-      )
+      const statusLabel = result.status === 'skipped' ? 'already exists and up to date' : result.status
+      process.stdout.write(`  ${result.status === 'created' ? 'create' : result.status === 'updated' ? 'update' : 'skip  '}   skill (${scope}): ${result.path} (${statusLabel})\n`)
     }
 
     if (values.init && gitignore) {
@@ -509,19 +506,17 @@ async function runSetupCommand({ values, settings, projectConfig, globalConfig }
       skillPresent = true
     } catch {}
 
-    if (skillPresent) {
-      process.stdout.write(`  [2/5] agent skill:    ${skillPath} (already present)\n`)
+    let wantSkill = true
+    if (!skillPresent && interactive) {
+      wantSkill = await askYesNo(rl, 'Install knl-view agent skill to .agents/skills/knl-view?', true)
+    }
+
+    if (wantSkill) {
+      const skillResult = await seedSkill({ scope: values.dir || 'project', cwd: process.cwd(), home: process.env.HOME, syncGlobal: true })
+      const statusLabel = skillResult.status === 'skipped' ? 'up to date' : skillResult.status
+      process.stdout.write(`  [2/5] agent skill:    ${skillResult.path} (${statusLabel})\n`)
     } else {
-      let wantSkill = true
-      if (interactive) {
-        wantSkill = await askYesNo(rl, 'Install knl-view agent skill to .agents/skills/knl-view?', true)
-      }
-      if (wantSkill) {
-        const skillResult = await seedSkill({ scope: values.dir || 'project', cwd: process.cwd() })
-        process.stdout.write(`  [2/5] agent skill:    ${skillResult.path} (${skillResult.status})\n`)
-      } else {
-        process.stdout.write(`  [2/5] agent skill:    skipped by user\n`)
-      }
+      process.stdout.write(`  [2/5] agent skill:    skipped by user\n`)
     }
 
     // Audit and seed decision-history skill

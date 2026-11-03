@@ -57,6 +57,34 @@ describe('seedSkill', () => {
     const result = await seedSkill({ scope: 'project', cwd: dir })
     assert.equal(result.status, 'skipped')
   })
+
+  test('updates existing skill if content differs', async () => {
+    const dir = makeTempDir()
+    const target = path.join(dir, '.agents', 'skills', 'knl-view', 'SKILL.md')
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, 'old content\n', 'utf8')
+
+    const result = await seedSkill({ scope: 'project', cwd: dir })
+    assert.equal(result.status, 'updated')
+    const updated = fs.readFileSync(target, 'utf8')
+    assert.ok(updated.includes('name: knl-view'))
+    assert.ok(updated.includes('Hard Negative Constraints'))
+  })
+
+  test('global scope updates existing candidate without creating duplicate skill folder', async () => {
+    const home = makeTempDir()
+    const globalAgentSkill = path.join(home, '.agents', 'skills', 'knl-view', 'SKILL.md')
+    fs.mkdirSync(path.dirname(globalAgentSkill), { recursive: true })
+    fs.writeFileSync(globalAgentSkill, 'old global content\n', 'utf8')
+
+    const result = await seedSkill({ scope: 'global', home })
+    assert.equal(result.path, globalAgentSkill)
+    assert.equal(result.status, 'updated')
+
+    // Ensure no second duplicate skill folder was created in .config/opencode
+    const opencodeSkill = path.join(home, '.config', 'opencode', 'skills', 'knl-view', 'SKILL.md')
+    assert.equal(fs.existsSync(opencodeSkill), false)
+  })
 })
 
 describe('ensureGitignore', () => {
@@ -83,6 +111,8 @@ describe('buildAgentInstructionBlock', () => {
     assert.ok(block.includes('/graphify'))
     assert.ok(block.includes('<!-- knl-view:start -->'))
     assert.ok(block.includes('<!-- knl-view:end -->'))
+    assert.ok(block.includes('Strict Anti-Grep & Mandatory Trace-Before-Edit Protocol'))
+    assert.ok(block.includes('STRICT BAN ON AD-HOC GREP/FIND'))
   })
 
   test('omits Graphify fallback when hasGraphify is false', () => {
@@ -90,6 +120,8 @@ describe('buildAgentInstructionBlock', () => {
     assert.ok(!block.includes('Graphify is the fallback'))
     assert.ok(!block.includes('/graphify'))
     assert.ok(block.includes('KNL-View is the primary graph tool'))
+    assert.ok(block.includes('Strict Anti-Grep & Mandatory Trace-Before-Edit Protocol'))
+    assert.ok(block.includes('STRICT BAN ON AD-HOC GREP/FIND'))
   })
 })
 
