@@ -23,6 +23,7 @@ import {
   writeSourcesSyncState,
   staleWarning,
   annotateTrace,
+  traceHonesty,
   collectorHttpUrl,
   purgeArchivedRecords,
   SOURCE_RELATIONS
@@ -982,7 +983,7 @@ describe('symbol graph', () => {
     // The symbol disappears from the file: its record is tombstoned and
     // its label file is deleted (the file no longer defines any symbol).
     // main.js's label is rewritten too: its call to boot() flips from
-    // "1 linked" to "1 skipped (ambiguous-callee)" in the resolution note.
+    // "1 linked" to "1 skipped (external-callee)" in the resolution note.
     write(root, 'lib/boot.js', '')
     const second = await syncSourcesToAnchorDB(client, root)
     assert.equal(second.tombstoned, 1)
@@ -1145,7 +1146,7 @@ describe('same-file receiver resolution', () => {
     assert.deepEqual(resolution.get('a.js#run'), {
       matched: 1,
       skipped: 3,
-      skippedReasons: { 'local-receiver': 1, 'ambiguous-callee': 1, 'self-call': 1 }
+      skippedReasons: { 'local-receiver': 1, 'external-callee': 1, 'self-call': 1 }
     })
   })
 
@@ -1167,6 +1168,31 @@ describe('same-file receiver resolution', () => {
     assert.deepEqual(targets.map(e=>e.to), [])
     assert.equal(resolution.get('a.js#run').matched, 0)
     assert.equal(resolution.get('a.js#run').skipped, 1)
+    assert.equal(resolution.get('a.js#run').skippedReasons['ambiguous-callee'], 1)
+  })
+
+  test('external and ambiguous callees get different skip reasons', () => {
+    // missing() is defined nowhere (external); dup() twice project-wide
+    // (ambiguous). Same skip count, different diagnosis for the reader.
+    const symbolIndex = new Map([
+      ['dup', ['x.js#dup', 'y.js#dup']]
+    ])
+    const file = {
+      ext: '.js',
+      importNames: [],
+      symbols: [
+        { name: 'run', kind: 'function', line: 1, lines: 4, id: 'a.js#run' }
+      ],
+      calls: [
+        { name: 'missing', recv: null, row: 1 },
+        { name: 'dup', recv: null, row: 2 }
+      ]
+    }
+
+    const { targets, resolution } = resolveCallTargets('a.js', file, symbolIndex, {})
+    assert.deepEqual(targets, [])
+    assert.equal(resolution.get('a.js#run').skipped, 2)
+    assert.equal(resolution.get('a.js#run').skippedReasons['external-callee'], 1)
     assert.equal(resolution.get('a.js#run').skippedReasons['ambiguous-callee'], 1)
   })
 
@@ -1294,6 +1320,32 @@ describe('import lineage quality', () => {
     // direction=in leaves out unqueried: the emptiness is by construction.
     const incoming = annotateTrace({ out: [], in: [] }, 'isolated.js', local, 'in')
     assert.deepEqual(incoming.warnings, [])
+  })
+
+  test('traceHonesty: shared envelope for CLI and HTTP', () => {
+    const local = {
+      nodes: [{ type: 'file' }, { type: 'file' }, { type: 'symbol' }],
+      fileBytes: 500
+    }
+    const dead = traceHonesty('ECONNREFUSED', local, { syncedAt: '2026-11-04T00:00:00Z', files: 2, bytes: 500 })
+    assert.equal(dead.server, 'unavailable')
+    assert.equal(dead.asOf, '2026-11-04T00:00:00Z')
+    assert.equal(dead.asOfSource, 'local')
+    assert.equal(dead.drift, null)
+
+    // Drift: the synced count is far off, the scan shows the real one.
+    const drifted = traceHonesty(null, local, { syncedAt: '2026-11-04T00:00:00Z', files: 5, bytes: 10 })
+    assert.equal(drifted.server, 'reachable')
+    assert.match(drifted.drift, /^graph drift-suspect: 3 files differ, 490 KB differ since last sync$/)
+
+    // Never synced: asOf stays null, no drift signal is invented.
+    const fresh = traceHonesty(null, local, null)
+    assert.equal(fresh.asOf, null)
+    assert.equal(fresh.drift, null)
+
+    // No local scan (custom server setup): no invented counts.
+    const bare = traceHonesty(null, {}, { syncedAt: '2026-11-04T00:00:00Z', files: 10, bytes: 10 })
+    assert.equal(bare.drift, null)
   })
 })
 

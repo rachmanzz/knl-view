@@ -4,7 +4,7 @@ import path from 'node:path'
 import { readMap, normalizeMap, decorateNode } from './map.js'
 import { buildGraphFromRoot } from './graph/parser.js'
 import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain, traceInboundFromMirror, mergeLineage, mirrorStillValid } from './graph/anchordb_client.js'
-import { traceSources, buildSourcesGraph, annotateTrace } from './graph/sources.js'
+import { traceSources, buildSourcesGraph, annotateTrace, traceHonesty, readSourcesSyncState } from './graph/sources.js'
 import {
   deriveStatus,
   readClaimsIndex,
@@ -396,7 +396,7 @@ async function handleSourcesTrace(res, state, url, scan = {}) {
   const hops = Number.parseInt(url.searchParams.get('hops') || '2', 10)
   const maxHops = Math.min(Math.max(1, Number.isInteger(hops) ? hops : 2), 10)
   try {
-    const { out, in: inc } = await traceSources(state.sourcesClient, target, direction, maxHops)
+    const { out, in: inc, serverError } = await traceSources(state.sourcesClient, target, direction, maxHops)
     // Same annotation as the CLI: per-edge lineage quality and the
     // empty-out warning come from one local scan of the served project.
     // No project root (custom setup): skip the scan, degrade to plain edges.
@@ -404,11 +404,21 @@ async function handleSourcesTrace(res, state, url, scan = {}) {
       ? await buildSourcesGraph(scan.root, null, { include: scan.include, exclude: scan.exclude })
       : {}
     const annotated = annotateTrace({ out, in: inc }, target, local, direction)
+    // Same honesty envelope as the CLI: asOf, server status, drift. HTTP
+    // has no stderr, so the operational notes ride the warnings array.
+    const syncState = await readSourcesSyncState(state.sourcesModel)
+    const honesty = traceHonesty(serverError, local, syncState)
+    const warnings = [...annotated.warnings]
+    if (serverError) warnings.push(`sources graph unavailable (${serverError})`)
+    if (honesty.drift) warnings.push(honesty.drift)
     return sendJson(res, 200, {
       target,
       maxHops,
       direction,
-      warnings: annotated.warnings,
+      asOf: honesty.asOf,
+      asOfSource: honesty.asOfSource,
+      server: honesty.server,
+      warnings,
       out: annotated.out.map((node) => ({ ...node, via: 'out' })),
       in: annotated.in.map((node) => ({ ...node, via: 'in' }))
     })

@@ -21,7 +21,7 @@ import {
 } from '../server/consensus.js'
 import { readProjectConfig, readGlobalConfig, projectSlug, anchordbClientOptions, resolveModel, resolveSettings, knlGlobalDir, globalConfigPath } from '../server/config.js'
 import { createAnchorWireClient, mirrorStillValid } from '../server/graph/anchordb_client.js'
-import { syncSourcesToAnchorDB, traceSources, purgeArchivedRecords, readSourcesSyncState, writeSourcesSyncState, staleWarning, buildSourcesGraph, annotateTrace } from '../server/graph/sources.js'
+import { syncSourcesToAnchorDB, traceSources, purgeArchivedRecords, readSourcesSyncState, writeSourcesSyncState, buildSourcesGraph, annotateTrace, traceHonesty } from '../server/graph/sources.js'
 import {
   parseModuleSpecifier,
   buildModuleGraph,
@@ -281,14 +281,14 @@ if (consensusSub) {
 const sourcesSub = positionals?.[0] === 'sources' ? positionals?.[1] : null
 if (sourcesSub) {
   try {
-    // The trace handler may return 1 (--strict with an unreachable
-    // server); every other path returns undefined, which exits 0.
+    // Trace returns 1 only for --strict with an unreachable server, and
+    // exits only after its stdout has drained; sync, collect, and help
+    // return undefined.
     const code = await runSourcesCommand(sourcesSub, values, { settings })
     process.exit(code === 1 ? 1 : 0)
   } catch (err) {
     fail(`Sources command failed: ${err.message}`)
   }
-  process.exit(0)
 }
 
 // The "modules" command: on-demand external boundary graph in global AnchorDB
@@ -1418,11 +1418,8 @@ async function runSourcesCommand(sub, values, { settings }) {
       include: settings.include,
       exclude: settings.exclude
     })
-    const diskFiles = local.nodes.filter((node) => node.type === 'file').length
     const syncState = await readSourcesSyncState(sourcesModel)
-    const warnings = []
-    const stale = staleWarning(syncState, diskFiles, local.fileBytes)
-    if (stale) warnings.push(stale)
+    const honesty = traceHonesty(serverError, local, syncState)
     // Resolution per symbol node: matched + skipped covers every call site
     // in that symbol's body, so an empty in: [] can no longer pass as
     // "no callers" when the resolver skipped sites instead of linking them.
@@ -1433,27 +1430,34 @@ async function runSourcesCommand(sub, values, { settings }) {
       return entry ? { ...entry, skippedReasons: { ...entry.skippedReasons } } : undefined
     }
     const annotated = annotateTrace({ out, in: inc }, target, local, direction)
-    process.stdout.write(JSON.stringify({
-      center: target,
-      asOf: syncState?.syncedAt ?? null,
-      asOfSource: 'local',
-      server: serverError ? 'unavailable' : 'reachable',
-      maxHops,
-      direction,
-      warnings: annotated.warnings,
-      out: annotated.out.map((node) => ({ ...node, resolution: resolveFor(node.id) })),
-      in: annotated.in.map((node) => ({ ...node, resolution: resolveFor(node.id) }))
-    }, null, 2) + '\n')
-    if (serverError) {
-      process.stderr.write(`knl-view: sources graph unavailable (${serverError}).\n`)
-    }
-    for (const warning of warnings) {
-      process.stderr.write(`knl-view: ${warning}.\n`)
-    }
+    // Exit only after stdout drains: process.exit does not wait for
+    // pending async pipe writes, and a piped trace can be large. The
+    // stderr notes are tiny and ride along in the drain callback.
+    const code = values.strict && serverError ? 1 : 0
+    await new Promise((resolve) => {
+      process.stdout.write(JSON.stringify({
+        center: target,
+        asOf: honesty.asOf,
+        asOfSource: honesty.asOfSource,
+        server: honesty.server,
+        maxHops,
+        direction,
+        warnings: annotated.warnings,
+        out: annotated.out.map((node) => ({ ...node, resolution: resolveFor(node.id) })),
+        in: annotated.in.map((node) => ({ ...node, resolution: resolveFor(node.id) }))
+      }, null, 2) + '\n', () => {
+        if (serverError) {
+          process.stderr.write(`knl-view: sources graph unavailable (${serverError}).\n`)
+        }
+        if (honesty.drift) {
+          process.stderr.write(`knl-view: ${honesty.drift}.\n`)
+        }
+        resolve()
+      })
+    })
     // Strict mode is for audits: a pipeline must stop as loudly as the
     // original ECONNREFUSED. Staleness never changes the exit code.
-    if (values.strict && serverError) return 1
-    return
+    return code
   }
 
   fail('Unknown sources subcommand.\n' +

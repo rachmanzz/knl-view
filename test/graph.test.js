@@ -272,6 +272,23 @@ describe('Server Graph HTTP Endpoints', () => {
       await new Promise((resolve) => server.close(resolve))
     }
   })
+
+  test('/api/sources/trace degrades honestly when AnchorDB is off', async () => {
+    const knlDir = path.join(rootDir, '.knowledges')
+    const server = createKnowledgeServer({ root: knlDir, port: 0, projectRoot: rootDir })
+
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const baseUrl = `http://127.0.0.1:${server.address().port}`
+
+    try {
+      const res = await fetch(`${baseUrl}/api/sources/trace?target=server/config.js&direction=out&hops=1`)
+      assert.equal(res.status, 503)
+      const body = await res.json()
+      assert.ok(body.error)
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
 })
 
 describe('CLI Graph Trace (Zero-File Intermediary)', () => {

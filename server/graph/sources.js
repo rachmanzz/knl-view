@@ -11,9 +11,9 @@ import { createPathMatcher, syncStatePath } from '../config.js'
 // tree-sitter syntax extraction: JS family, TS, Go, Python, Rust). Edges:
 // file imports file, file defines symbol, symbol calls symbol, each stored
 // in both directions because causalChain walks forward only. Hidden paths
-// (dot-prefixed) are skipped except .github;
-// node_modules, dist, and .gitignore patterns are skipped so dependency
-// folders cannot flood the graph.
+// (dot-prefixed) are skipped except .github. node_modules, dist, and
+// .gitignore patterns are skipped so dependency folders cannot flood the
+// graph.
 //
 // Everything lives in the server. Nodes are records with numeric attributes
 // only (AnchorDB admits no text), enumerated with list(); sync is
@@ -380,7 +380,6 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
   }
   // callResolution feeds the label files: skipped call sites per symbol so a
   // reader of the labels sees what the resolver chose not to link.
-
   const callResolution = new Map() // file rel -> Map(symbol id -> stats)
   // Lineage quality per import edge: exact when one specifier resolved to
   // exactly one file, lazy when it fanned out over a package (Go imports,
@@ -475,12 +474,20 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
  * Foo's own module). A same-file receiver resolves through its qualified
  * name only: the bare fallback (the bare call name) stays gated on import
  * evidence, so `s.logger.Log()` still cannot be absorbed by a single
- * project-wide `Log()`.
+ * project-wide `Log()`. Receiver evidence narrows the gate, not the
+ * target: a qualified name with a single project-wide hit can still
+ * belong to a different same-named type in another module, and the
+ * ambiguity rule cannot see that.
  *
  * Returns { targets, resolution }: resolution maps each owner symbol id to
  * { matched, skipped, skippedReasons }. matched + skipped covers every
  * call site inside that symbol's body, so nothing is dropped silently.
  * Calls outside any symbol body are file-level and carry no owner.
+ * Skip reasons: local-receiver (the receiver carries no import or own-type
+ * evidence), self-call (the call resolves to its own symbol),
+ * ambiguous-callee (the callee name is defined more than once
+ * project-wide), external-callee (the callee name is defined nowhere in
+ * the project: stdlib, dependencies).
  */
 export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
   const symbols = file.symbols || []
@@ -501,12 +508,16 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
   }
   // A candidate resolves when exactly one definition matches, preferring
   // definitions in the same package directory; anything ambiguous or
-  // external stays out of the graph.
+  // external stays out of the graph. The AMBIGUOUS sentinel separates
+  // "defined more than once" from "not defined in this project": both skip,
+  // but the recorded reason differs and readers act on it differently.
+  const AMBIGUOUS = Symbol('ambiguous')
   const resolve = (key) => {
     const ids = symbolIndex.get(key) || []
     const local = ids.filter((id) => path.posix.dirname(id.split('#')[0]) === dir)
     const pick = local.length === 1 ? local : ids
-    return pick.length === 1 ? pick[0] : null
+    if (pick.length === 1) return pick[0]
+    return pick.length > 1 ? AMBIGUOUS : null
   }
   const importNames = file.importNames instanceof Set
     ? file.importNames
@@ -544,9 +555,14 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
         : [`${call.recv}.${call.name}`, call.name]
     let hit = null
     let self = false
+    let ambiguous = false
     for (const key of candidates) {
       const to = resolve(key)
       if (!to) continue
+      if (to === AMBIGUOUS) {
+        ambiguous = true
+        continue
+      }
       if (to === from) {
         // A self-edge would loop the trace; excluded on purpose, but never
         // silently: it still counts as a skipped site below.
@@ -560,12 +576,19 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
       skip(from, 'self-call')
       continue
     }
-    if (!hit) {
+    if (hit) {
+      targets.push({ from, to: hit })
+      bucket(from).matched += 1
+      continue
+    }
+    // A name defined more than once project-wide is a different problem
+    // from a name defined nowhere: ambiguity asks for a rename, an
+    // external callee (stdlib, dependencies) is simply out of the graph.
+    if (ambiguous) {
       skip(from, 'ambiguous-callee')
       continue
     }
-    targets.push({ from, to: hit })
-    bucket(from).matched += 1
+    skip(from, 'external-callee')
   }
   return { targets, resolution }
 }
@@ -921,6 +944,29 @@ export function annotateTrace(trace, center, local, direction = 'both') {
     }
   }
   return { out, in: inc, warnings }
+}
+
+/**
+ * Honesty envelope shared by the CLI and the HTTP trace paths: dates the
+ * graph from the local sync-state (asOf) and arms the drift sensor against
+ * the fresh local scan. The caller decides the channel: the CLI prints the
+ * operational notes on stderr, the HTTP handler (which has no stderr) folds
+ * them into its warnings array.
+ */
+export function traceHonesty(serverError, local, syncState) {
+  let drift = null
+  if (syncState) {
+    const diskFiles = local.nodes
+      ? local.nodes.filter((node) => node.type === 'file').length
+      : null
+    drift = staleWarning(syncState, diskFiles, local.fileBytes)
+  }
+  return {
+    asOf: syncState?.syncedAt ?? null,
+    asOfSource: 'local',
+    server: serverError ? 'unavailable' : 'reachable',
+    drift
+  }
 }
 
 /**
