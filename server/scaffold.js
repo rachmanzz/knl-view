@@ -454,7 +454,11 @@ idempotent and server-authoritative (no local mirror);
 \`knl-view sources trace --target=<id>\` and
 \`GET /api/sources/trace?target=<id>\` answer lineage: a target
 containing \`#\` walks symbol lineage (\`calls\`/\`called_by\`), a
-plain path walks file lineage (\`imports\`/\`imported_by\`). A removed
+plain path walks file lineage (\`imports\`/\`imported_by\`). Import edges
+carry a lineage marker: \`exact\` when one specifier resolves to exactly
+one file, \`lazy\` when it fans out over a package (Go imports); trace
+output annotates each edge, and an empty \`out\` on a file whose imports
+resolve to no project file is warned, not silent. A removed
 file or symbol is tombstoned (attribute \`tombstone = 2\`) after its
 edges are unlinked; if it comes back, the tombstone lifts and the edges
 are relinked.

@@ -382,18 +382,56 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
   // reader of the labels sees what the resolver chose not to link.
 
   const callResolution = new Map() // file rel -> Map(symbol id -> stats)
+  // Lineage quality per import edge: exact when one specifier resolved to
+  // exactly one file, lazy when it fanned out over a package (Go imports,
+  // and any future multi-file resolution). AnchorDB stores only the edge,
+  // so this map is the classification the labels and trace annotation
+  // read back; exact wins when two specifiers reach the same file.
+  const importQuality = new Map() // file rel -> Map(target rel -> 'exact'|'lazy')
+  const importSpecs = new Map() // file rel -> { declared, unresolved, exact, lazy }
   for (const [rel, file] of Object.entries(structure)) {
-    let targets = []
-    if (file.ext === '.go') {
-      targets = file.imports.flatMap((spec) => resolveGoSpecifiers(spec, file.modulePath, scanned))
-    } else if (file.ext === '.py') {
-      targets = resolvePySpecifiers(rel, file.imports, scanned)
-    } else if (file.ext === '.rs') {
-      targets = resolveRustSpecifiers(rel, file.imports, scanned)
-    } else {
-      targets = resolveJsSpecifiers(rel, file.imports, scanned)
+    const perFile = new Map()
+    let declared = 0
+    let unresolved = 0
+    const record = (resolved) => {
+      declared += 1
+      if (!resolved.length) {
+        unresolved += 1
+        return
+      }
+      const quality = resolved.length === 1 ? 'exact' : 'lazy'
+      for (const target of resolved) {
+        if (!target || target === rel) continue
+        if (perFile.get(target) === 'exact') continue
+        perFile.set(target, quality)
+      }
     }
-    for (const target of targets) {
+    for (const spec of file.imports || []) {
+      if (file.ext === '.go') {
+        record(resolveGoSpecifiers(spec, file.modulePath, scanned))
+      } else if (file.ext === '.py') {
+        record(resolvePySpecifiers(rel, [spec], scanned))
+      } else if (file.ext === '.rs') {
+        record(resolveRustSpecifiers(rel, [spec], scanned))
+      } else {
+        // Bare JS specifiers are packages by language rule, never local
+        // files: they count as declared and unresolved, never as edges.
+        record(spec.startsWith('./') || spec.startsWith('../')
+          ? [resolveImportSpecifier(rel, spec, scanned)].filter(Boolean)
+          : [])
+      }
+    }
+    if (declared) {
+      let exact = 0
+      let lazy = 0
+      for (const quality of perFile.values()) {
+        if (quality === 'exact') exact += 1
+        else lazy += 1
+      }
+      importSpecs.set(rel, { declared, unresolved, exact, lazy })
+      if (perFile.size) importQuality.set(rel, perFile)
+    }
+    for (const target of perFile.keys()) {
       if (target && target !== rel) edges.push({ from: rel, to: target, type: 'imports' })
     }
     const calls = resolveCallTargets(rel, file, symbolIndex, scanned)
@@ -421,7 +459,7 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
       }))
     }
   }
-  return { nodes, edges, symbolsByFile, callResolution, fileBytes }
+  return { nodes, edges, symbolsByFile, callResolution, fileBytes, importQuality, importSpecs }
 }
 
 /**
@@ -548,10 +586,17 @@ export function desiredSourceEdgeKeys(edges) {
 /**
  * Label text for one file's symbols: the information AnchorDB cannot hold
  * (attributes are numeric-only). Written under the label dir as a mirror
- * of the repo-relative path, one .md per file that has symbols.
+ * of the repo-relative path, one .md per file that has symbols. The
+ * imports line records the lineage classification at sync time, so the
+ * reason an edge is coarse lives in a durable artifact, not in a query.
  */
-export function labelContent(rel, symbols, resolution = null) {
+export function labelContent(rel, symbols, resolution = null, imports = null) {
   const lines = [`# ${rel}`, '']
+  if (imports && imports.declared > 0) {
+    let line = `- imports: ${imports.exact} exact, ${imports.lazy} lazy`
+    if (imports.unresolved) line += ` (${imports.unresolved} specifier${imports.unresolved === 1 ? '' : 's'} unresolved)`
+    lines.push(line)
+  }
   for (const symbol of symbols) {
     const info = resolution?.get(symbol.id)
     const note = info ? ` calls ${info.matched} linked, ${info.skipped} skipped` : ''
@@ -568,14 +613,14 @@ export function labelContent(rel, symbols, resolution = null) {
  * write files whose content changed, delete files whose file or last
  * symbol is gone. Generated files only; never touches anything else.
  */
-export async function writeLabelFiles(rootAbs, labelDir = DEFAULT_LABEL_DIR, symbolsByFile, resolutionByFile = new Map()) {
+export async function writeLabelFiles(rootAbs, labelDir = DEFAULT_LABEL_DIR, symbolsByFile, resolutionByFile = new Map(), importStatsByFile = new Map()) {
   const base = path.resolve(rootAbs, labelDir)
   if (base !== rootAbs && !base.startsWith(rootAbs + path.sep)) {
     throw new Error(`labelDir "${labelDir}" resolves outside the project root`)
   }
   const expected = new Map()
   for (const [rel, symbols] of symbolsByFile) {
-    expected.set(rel, labelContent(rel, symbols, resolutionByFile.get(rel)))
+    expected.set(rel, labelContent(rel, symbols, resolutionByFile.get(rel), importStatsByFile.get(rel)))
   }
 
   const existing = new Set()
@@ -639,7 +684,7 @@ export async function writeLabelFiles(rootAbs, labelDir = DEFAULT_LABEL_DIR, sym
  *   files, symbols, edges, labels}>}
  */
 export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir, include = null, exclude = null } = {}) {
-  const { nodes, edges, symbolsByFile, callResolution, fileBytes } = await buildSourcesGraph(rootAbs, null, { include, exclude })
+  const { nodes, edges, symbolsByFile, callResolution, fileBytes, importSpecs } = await buildSourcesGraph(rootAbs, null, { include, exclude })
   const desired = desiredSourceEdgeKeys(edges)
   const diskIds = new Set(nodes.map((node) => node.id))
 
@@ -776,7 +821,7 @@ export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir, include
     if (!live.has(from) || !live.has(to)) orphans += 1
   }
 
-  const labels = await writeLabelFiles(rootAbs, labelDir || DEFAULT_LABEL_DIR, symbolsByFile, callResolution)
+  const labels = await writeLabelFiles(rootAbs, labelDir || DEFAULT_LABEL_DIR, symbolsByFile, callResolution, importSpecs)
 
   const files = nodes.filter((node) => node.type === 'file').length
   const symbols = nodes.filter((node) => node.type === 'symbol').length
@@ -838,6 +883,44 @@ export async function traceSources(client, target, direction = 'both', maxHops =
   const out = direction === 'in' ? [] : await walk(target, outRelation)
   const inc = direction === 'out' ? [] : await walk(target, inRelation)
   return { out, in: inc, serverError }
+}
+
+/**
+ * Annotate a trace result with per-edge lineage quality and honest
+ * warnings, from the same local scan that sync used (guarded upstream by
+ * asOf and the drift sensor). Import edges are exact when one specifier
+ * resolved to exactly one file, lazy when it fanned out over a package;
+ * call edges carry no marker. An empty out direction on a file that
+ * declares imports is warned, not silent: the specifier(s) resolved to
+ * no project file, so the emptiness is resolution, not absence. An empty
+ * in direction carries no warning - imported_by is complete over the
+ * synced edges and imports have no skip path.
+ */
+export function annotateTrace(trace, center, local, direction = 'both') {
+  const isFile = (id) => !id.includes('#')
+  const fileCenter = isFile(center)
+  const quality = (from, to) => local.importQuality?.get(from)?.get(to) || null
+  const out = trace.out.map(([id, hop]) => {
+    const node = { id, hop }
+    if (fileCenter && isFile(id)) node.lineage = quality(center, id) || undefined
+    return node
+  })
+  const inc = trace.in.map(([id, hop]) => {
+    const node = { id, hop }
+    if (fileCenter && isFile(id)) node.lineage = quality(id, center) || undefined
+    return node
+  })
+  const warnings = []
+  if (fileCenter && direction !== 'in' && trace.out.length === 0) {
+    const stats = local.importSpecs?.get(center)
+    if (stats?.declared > 0) {
+      warnings.push(
+        `out is empty: ${stats.declared} import specifier${stats.declared === 1 ? '' : 's'} ` +
+        'resolved to no project file; external packages are not graph nodes'
+      )
+    }
+  }
+  return { out, in: inc, warnings }
 }
 
 /**

@@ -22,6 +22,7 @@ import {
   readSourcesSyncState,
   writeSourcesSyncState,
   staleWarning,
+  annotateTrace,
   collectorHttpUrl,
   purgeArchivedRecords,
   SOURCE_RELATIONS
@@ -990,10 +991,12 @@ describe('symbol graph', () => {
     assert.ok(!fs.existsSync(path.join(root, '.knowledges/.knl-data/lib/boot.js.md')))
 
     // The file disappears too: its own record is tombstoned as well.
+    // main.js's label is rewritten again: its import flips from
+    // "1 exact" to unresolved in the lineage line.
     fs.rmSync(path.join(root, 'lib/boot.js'))
     const third = await syncSourcesToAnchorDB(client, root)
     assert.equal(client.records.get('lib/boot.js').tombstone, 2)
-    assert.deepEqual(third.labels, { written: 0, deleted: 0 })
+    assert.deepEqual(third.labels, { written: 1, deleted: 0 })
   })
 })
 
@@ -1206,6 +1209,91 @@ describe('same-file receiver resolution', () => {
 describe('SOURCE_RELATIONS', () => {
   test('the two mirrored directions', () => {
     assert.deepEqual(SOURCE_RELATIONS, ['imports', 'imported_by'])
+  })
+})
+
+describe('import lineage quality', () => {
+  test('JS: relative imports exact, bare packages declared and unresolved', async () => {
+    const root = makeRepo()
+    write(root, 'main.js', "import { boot } from './lib/boot.js'\nimport fs from 'node:fs'\nimport 'x-package'\n")
+    write(root, 'lib/boot.js', 'export function boot() { return 1 }\n')
+
+    const { importQuality, importSpecs } = await buildSourcesGraph(root)
+    assert.equal(importQuality.get('main.js').get('lib/boot.js'), 'exact')
+    assert.deepEqual([...importQuality.get('main.js').keys()], ['lib/boot.js'])
+    assert.deepEqual(importSpecs.get('main.js'), { declared: 3, unresolved: 2, exact: 1, lazy: 0 })
+    assert.equal(importSpecs.get('lib/boot.js'), undefined)
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  test('Go: a package import fans out lazy; external stays unresolved', async () => {
+    const root = makeRepo()
+    fs.writeFileSync(path.join(root, 'go.mod'), 'module github.com/acme/app\n\ngo 1.22\n', 'utf8')
+    write(root, 'main.go', 'package main\n\nimport (\n\t"fmt"\n\t"github.com/acme/app/internal/queue"\n)\n\nfunc main() { queue.Run() }\n')
+    write(root, 'internal/queue/queue.go', 'package queue\n\nimport "fmt"\n\nfunc Run() { fmt.Println("q") }\n')
+    write(root, 'internal/queue/helper.go', 'package queue\n\nfunc help() {}\n')
+
+    const { importQuality, importSpecs } = await buildSourcesGraph(root)
+    assert.equal(importQuality.get('main.go').get('internal/queue/queue.go'), 'lazy')
+    assert.equal(importQuality.get('main.go').get('internal/queue/helper.go'), 'lazy')
+    assert.deepEqual(importSpecs.get('main.go'), { declared: 2, unresolved: 1, exact: 0, lazy: 2 })
+    assert.deepEqual(importSpecs.get('internal/queue/queue.go'), { declared: 1, unresolved: 1, exact: 0, lazy: 0 })
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  test('Rust mod and Python module imports stay exact', async () => {
+    const root = makeRepo()
+    write(root, 'src/main.rs', 'mod utils;\nfn main() { utils::run() }\n')
+    write(root, 'src/utils.rs', 'pub fn run() {}\n')
+    write(root, 'app/service.py', 'from .helper import value\n')
+    write(root, 'app/helper.py', 'value = 1\n')
+
+    const { importQuality } = await buildSourcesGraph(root)
+    assert.equal(importQuality.get('src/main.rs').get('src/utils.rs'), 'exact')
+    assert.equal(importQuality.get('app/service.py').get('app/helper.py'), 'exact')
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  test('label files record the classification at sync time', () => {
+    const text = labelContent('main.go', [
+      { name: 'main', kind: 'function', line: 5, lines: 3, id: 'main.go#main' }
+    ], null, { declared: 3, unresolved: 1, exact: 1, lazy: 1 })
+    assert.equal(text,
+      '# main.go\n\n' +
+      '- imports: 1 exact, 1 lazy (1 specifier unresolved)\n' +
+      '- `main` (function, line 5)\n')
+  })
+
+  test('annotateTrace marks file edges and warns on resolution-caused emptiness', () => {
+    const local = {
+      importQuality: new Map([
+        ['main.go', new Map([['internal/queue/queue.go', 'lazy']])]
+      ]),
+      importSpecs: new Map([
+        ['main.go', { declared: 2, unresolved: 1, exact: 0, lazy: 1 }],
+        ['isolated.js', { declared: 2, unresolved: 2, exact: 0, lazy: 0 }]
+      ])
+    }
+    const trace = {
+      out: [['internal/queue/queue.go', 1], ['main.go#main', 1]],
+      in: []
+    }
+
+    const both = annotateTrace(trace, 'main.go', local, 'both')
+    assert.equal(both.out[0].lineage, 'lazy')
+    assert.equal(both.out[0].resolution, undefined)
+    assert.equal(both.out[1].lineage, undefined) // symbol edge: calls carry no marker
+    assert.equal(both.in.length, 0)
+    assert.deepEqual(both.warnings, [])
+
+    const empty = annotateTrace({ out: [], in: [] }, 'isolated.js', local, 'both')
+    assert.deepEqual(empty.warnings, [
+      'out is empty: 2 import specifiers resolved to no project file; external packages are not graph nodes'
+    ])
+
+    // direction=in leaves out unqueried: the emptiness is by construction.
+    const incoming = annotateTrace({ out: [], in: [] }, 'isolated.js', local, 'in')
+    assert.deepEqual(incoming.warnings, [])
   })
 })
 

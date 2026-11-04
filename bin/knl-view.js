@@ -21,7 +21,7 @@ import {
 } from '../server/consensus.js'
 import { readProjectConfig, readGlobalConfig, projectSlug, anchordbClientOptions, resolveModel, resolveSettings, knlGlobalDir, globalConfigPath } from '../server/config.js'
 import { createAnchorWireClient, mirrorStillValid } from '../server/graph/anchordb_client.js'
-import { syncSourcesToAnchorDB, traceSources, purgeArchivedRecords, readSourcesSyncState, writeSourcesSyncState, staleWarning, buildSourcesGraph } from '../server/graph/sources.js'
+import { syncSourcesToAnchorDB, traceSources, purgeArchivedRecords, readSourcesSyncState, writeSourcesSyncState, staleWarning, buildSourcesGraph, annotateTrace } from '../server/graph/sources.js'
 import {
   parseModuleSpecifier,
   buildModuleGraph,
@@ -384,7 +384,10 @@ const server = createKnowledgeServer({
   consensusModel: resolveModel(settings.models, 'consensus'),
   sourcesModel: resolveModel(settings.models, 'sources'),
   include: settings.include,
-  exclude: settings.exclude
+  exclude: settings.exclude,
+  // Sources trace annotates edges from a scan of the project's code, which
+  // lives at the launch directory; the knowledge base is only settings.path.
+  projectRoot: process.cwd()
 })
 
 server.on('error', (err) => {
@@ -1429,6 +1432,7 @@ async function runSourcesCommand(sub, values, { settings }) {
       const entry = local.callResolution.get(rel)?.get(id)
       return entry ? { ...entry, skippedReasons: { ...entry.skippedReasons } } : undefined
     }
+    const annotated = annotateTrace({ out, in: inc }, target, local, direction)
     process.stdout.write(JSON.stringify({
       center: target,
       asOf: syncState?.syncedAt ?? null,
@@ -1436,8 +1440,9 @@ async function runSourcesCommand(sub, values, { settings }) {
       server: serverError ? 'unavailable' : 'reachable',
       maxHops,
       direction,
-      out: out.map(([id, hop]) => ({ id, hop, resolution: resolveFor(id) })),
-      in: inc.map(([id, hop]) => ({ id, hop, resolution: resolveFor(id) }))
+      warnings: annotated.warnings,
+      out: annotated.out.map((node) => ({ ...node, resolution: resolveFor(node.id) })),
+      in: annotated.in.map((node) => ({ ...node, resolution: resolveFor(node.id) }))
     }, null, 2) + '\n')
     if (serverError) {
       process.stderr.write(`knl-view: sources graph unavailable (${serverError}).\n`)

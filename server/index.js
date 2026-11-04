@@ -4,7 +4,7 @@ import path from 'node:path'
 import { readMap, normalizeMap, decorateNode } from './map.js'
 import { buildGraphFromRoot } from './graph/parser.js'
 import { createAnchorWireClient, syncGraphToAnchorDB, traceCausalChain, traceInboundFromMirror, mergeLineage, mirrorStillValid } from './graph/anchordb_client.js'
-import { traceSources } from './graph/sources.js'
+import { traceSources, buildSourcesGraph, annotateTrace } from './graph/sources.js'
 import {
   deriveStatus,
   readClaimsIndex,
@@ -42,8 +42,14 @@ const MD_EXTS = new Set(['md', 'markdown', 'prd'])
 const MAX_DOC_BYTES = 8 * 1024 * 1024
 const TITLE_READ_BYTES = 8192
 
-export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085, anchordb = null, consensusModel = null, sourcesModel = null, include = null, exclude = null }) {
+export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', port = 8085, anchordb = null, consensusModel = null, sourcesModel = null, include = null, exclude = null, projectRoot = null }) {
   const rootAbs = path.resolve(root)
+  // The sources model scans the project's code, not the knowledge base.
+  // The server is started from the project root, so the CLI passes it
+  // explicitly; without it, the standard .knowledges layout is the clue.
+  const projectRootAbs = projectRoot
+    ? path.resolve(projectRoot)
+    : path.basename(rootAbs) === '.knowledges' ? path.dirname(rootAbs) : rootAbs
   const distAbs = dist ? path.resolve(dist) : null
   // Live AnchorDB connection status lives here, not a snapshot: attachAnchorDB
   // fills it after the server listens, and routes read the latest status.
@@ -62,7 +68,7 @@ export function createKnowledgeServer({ root, dist = null, host = '127.0.0.1', p
   }
 
   const server = http.createServer((req, res) => {
-    route(req, res, rootAbs, distAbs, { host, port, anchordb: anchordbState, include, exclude }).catch((err) => {
+    route(req, res, rootAbs, distAbs, { host, port, anchordb: anchordbState, include, exclude, projectRoot: projectRootAbs }).catch((err) => {
       if (!res.headersSent) sendJson(res, 500, { error: `Failed to handle request: ${err.message}` })
       else res.end()
     })
@@ -222,7 +228,7 @@ async function route(req, res, rootAbs, distAbs, listen) {
     return handleConsensus(res, listen.anchordb, url)
   }
   if (pathname === '/api/sources/trace') {
-    return handleSourcesTrace(res, listen.anchordb, url)
+    return handleSourcesTrace(res, listen.anchordb, url, { root: listen.projectRoot, include: listen.include, exclude: listen.exclude })
   }
   if (pathname.startsWith('/api/')) {
     return sendJson(res, 404, { error: `Unknown endpoint: ${pathname}` })
@@ -353,7 +359,7 @@ async function handleConsensus(res, state, url) {
 
 // Read-only lineage over the sources model (whole-project dependency
 // graph). Sync stays in the CLI; the server only answers traces.
-async function handleSourcesTrace(res, state, url) {
+async function handleSourcesTrace(res, state, url, scan = {}) {
   if (!state?.config) {
     return sendJson(res, 503, { error: 'AnchorDB is off. Add the "anchordb" block to the global knl-config.json.' })
   }
@@ -391,12 +397,20 @@ async function handleSourcesTrace(res, state, url) {
   const maxHops = Math.min(Math.max(1, Number.isInteger(hops) ? hops : 2), 10)
   try {
     const { out, in: inc } = await traceSources(state.sourcesClient, target, direction, maxHops)
+    // Same annotation as the CLI: per-edge lineage quality and the
+    // empty-out warning come from one local scan of the served project.
+    // No project root (custom setup): skip the scan, degrade to plain edges.
+    const local = scan.root
+      ? await buildSourcesGraph(scan.root, null, { include: scan.include, exclude: scan.exclude })
+      : {}
+    const annotated = annotateTrace({ out, in: inc }, target, local, direction)
     return sendJson(res, 200, {
       target,
       maxHops,
       direction,
-      out: out.map(([id, hop]) => ({ id, hop, via: 'out' })),
-      in: inc.map(([id, hop]) => ({ id, hop, via: 'in' }))
+      warnings: annotated.warnings,
+      out: annotated.out.map((node) => ({ ...node, via: 'out' })),
+      in: annotated.in.map((node) => ({ ...node, via: 'in' }))
     })
   } catch (err) {
     return sendJson(res, 502, { error: `Sources trace failed: ${err.message}` })
