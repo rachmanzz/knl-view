@@ -247,10 +247,10 @@ Each file also defines **symbol nodes**, extracted from the same parse:
 - Symbol ids are `<path>#<name>`; class methods are `Class.method`. A name defined more than once in one file gets a line suffix (`<path>#<name>@<line>`), so duplicate helpers stay distinct records.
 - Kinds: `function`, `class`, `method`, `type`, `interface`, `enum`, `struct`, `trait`.
 - Edges: `defines`/`defined_in` (file → symbol) and `calls`/`called_by` (symbol → symbol), each stored in both directions because causalChain walks forward only.
-- Call resolution is conservative: a call belongs to its innermost enclosing symbol, and the callee must match exactly one definition project-wide (same package directory preferred in Go). A receiver-qualified call (`obj.Method()`) resolves only when the receiver is an import binding of the file, otherwise it is skipped, never guessed.
+- Call resolution is conservative: a call belongs to its innermost enclosing symbol, and the callee must match exactly one definition project-wide (same package directory preferred in Go). A receiver-qualified call (`obj.Method()`) resolves when the receiver is an import binding of the file or names a class-like type declared in the same file; otherwise it is skipped, never guessed.
 - Label text (symbol names and kinds; AnchorDB attributes are numeric-only) is written to `.knowledges/.knl-data/<path>.md`, one file per source file that has symbols; override the location with `labelDir` in the project config. Labels are regenerated and pruned on every sync.
 
-#### Supported Languages (v0.3.2)
+#### Supported Languages (v0.3.3)
 
 Tree-sitter WASM grammars run in-memory within Node.js without requiring host compilers:
 
