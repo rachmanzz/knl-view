@@ -3,15 +3,15 @@ import path from 'node:path'
 import { GraphNode } from './model.js'
 import { edgeKey } from './anchordb_client.js'
 import { SYNTAX_LANGUAGES, extractCode } from './syntax.js'
-import { createPathMatcher } from '../config.js'
+import { createPathMatcher, syncStatePath } from '../config.js'
 
 // Sources graph: the whole project as a dependency graph in AnchorDB, not
 // just the .knowledges markdown. Nodes are the files (id = repo relative
 // path) and the named symbols they define (id = `<path>#<name>`, from
-// tree-sitter syntax extraction: JS family and Go today, one uniform API
-// per language). Edges: file imports file, file defines symbol, symbol
-// calls symbol, each stored in both directions because causalChain walks
-// forward only. Hidden paths (dot-prefixed) are skipped except .github;
+// tree-sitter syntax extraction: JS family, TS, Go, Python, Rust). Edges:
+// file imports file, file defines symbol, symbol calls symbol, each stored
+// in both directions because causalChain walks forward only. Hidden paths
+// (dot-prefixed) are skipped except .github;
 // node_modules, dist, and .gitignore patterns are skipped so dependency
 // folders cannot flood the graph.
 //
@@ -40,6 +40,12 @@ const REVERSE_EDGE = {
   defines: 'defined_in',
   calls: 'called_by'
 }
+
+// Symbol kinds whose name may serve as a same-file receiver: a call
+// `Foo.bar()` in the file that declares Foo. The qualified candidate must
+// still match exactly one definition, so this only widens the evidence,
+// never the ambiguity rule.
+const RECEIVER_KINDS = new Set(['class', 'struct', 'trait', 'interface', 'enum', 'type'])
 
 // Where generated label files live inside the target project: the label
 // text AnchorDB cannot hold (numeric-only attributes). Overridable via the
@@ -329,6 +335,9 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
   const edges = []
   const symbolIndex = new Map() // symbol name -> [node id, ...] for call resolution
   const symbolsByFile = new Map() // file rel -> symbol nodes
+  // Total size of the scanned sources, in whole KB as the scanner stores
+  // it. Feeds the drift sensor's second aggregate, not precision claims.
+  const fileBytes = Object.values(scanned).reduce((sum, file) => sum + (file.size || 0), 0)
 
   const structure = {}
   for (const [rel] of Object.entries(scanned)) {
@@ -369,7 +378,10 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
       edges.push({ from: rel, to: symbol.id, type: 'defines' })
     }
   }
+  // callResolution feeds the label files: skipped call sites per symbol so a
+  // reader of the labels sees what the resolver chose not to link.
 
+  const callResolution = new Map() // file rel -> Map(symbol id -> stats)
   for (const [rel, file] of Object.entries(structure)) {
     let targets = []
     if (file.ext === '.go') {
@@ -384,7 +396,9 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
     for (const target of targets) {
       if (target && target !== rel) edges.push({ from: rel, to: target, type: 'imports' })
     }
-    for (const call of resolveCallTargets(rel, file, symbolIndex, scanned)) {
+    const calls = resolveCallTargets(rel, file, symbolIndex, scanned)
+    if (calls.resolution.size) callResolution.set(rel, calls.resolution)
+    for (const call of calls.targets) {
       edges.push({ from: call.from, to: call.to, type: 'calls' })
     }
   }
@@ -407,7 +421,7 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
       }))
     }
   }
-  return { nodes, edges, symbolsByFile }
+  return { nodes, edges, symbolsByFile, callResolution, fileBytes }
 }
 
 /**
@@ -417,10 +431,36 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
  * else is skipped rather than guessed. Go additionally accepts a qualified
  * callee (`Recv.Method`, `pkg.Fn`) and prefers a symbol defined in the
  * same package directory.
+ *
+ * A receiver counts as evidence when it is an import binding, or when it
+ * names a class-like type defined in this same file (`Foo.bar()` inside
+ * Foo's own module). A same-file receiver resolves through its qualified
+ * name only: the bare fallback (the bare call name) stays gated on import
+ * evidence, so `s.logger.Log()` still cannot be absorbed by a single
+ * project-wide `Log()`.
+ *
+ * Returns { targets, resolution }: resolution maps each owner symbol id to
+ * { matched, skipped, skippedReasons }. matched + skipped covers every
+ * call site inside that symbol's body, so nothing is dropped silently.
+ * Calls outside any symbol body are file-level and carry no owner.
  */
 export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
   const symbols = file.symbols || []
   const dir = path.posix.dirname(fromRel)
+  const resolution = new Map()
+  const bucket = (id) => {
+    let entry = resolution.get(id)
+    if (!entry) {
+      entry = { matched: 0, skipped: 0, skippedReasons: {} }
+      resolution.set(id, entry)
+    }
+    return entry
+  }
+  const skip = (id, reason) => {
+    const entry = bucket(id)
+    entry.skipped += 1
+    entry.skippedReasons[reason] = (entry.skippedReasons[reason] || 0) + 1
+  }
   // A candidate resolves when exactly one definition matches, preferring
   // definitions in the same package directory; anything ambiguous or
   // external stays out of the graph.
@@ -433,6 +473,9 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
   const importNames = file.importNames instanceof Set
     ? file.importNames
     : new Set(file.importNames || [])
+  const ownTypes = new Set(
+    symbols.filter((symbol) => RECEIVER_KINDS.has(symbol.kind)).map((symbol) => symbol.name)
+  )
   const targets = []
   for (const call of file.calls || []) {
     // Innermost symbol containing the call row: same file, so ordering by
@@ -447,21 +490,46 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
     }
     if (!owner) continue
     const from = owner.id || `${fromRel}#${owner.name}`
-    // Bare-name fallback needs import evidence: an unproven receiver like
-    // `s.logger.Log()` would be absorbed by the one project-wide `Log()`.
-    if (call.recv && !importNames.has(call.recv)) continue
-    const candidates = []
-    if (call.recv) candidates.push(`${call.recv}.${call.name}`)
-    candidates.push(call.name)
+    const importRecv = Boolean(call.recv) && importNames.has(call.recv)
+    const ownRecv = Boolean(call.recv) && !importRecv && ownTypes.has(call.recv)
+    if (call.recv && !importRecv && !ownRecv) {
+      skip(from, 'local-receiver')
+      continue
+    }
+    // Same-file receiver: the qualified name is the only candidate. Import
+    // receivers may fall back to the bare name; a bare call has only the
+    // bare name.
+    const candidates = !call.recv
+      ? [call.name]
+      : ownRecv
+        ? [`${call.recv}.${call.name}`]
+        : [`${call.recv}.${call.name}`, call.name]
+    let hit = null
+    let self = false
     for (const key of candidates) {
       const to = resolve(key)
-      if (to && to !== from) {
-        targets.push({ from, to })
+      if (!to) continue
+      if (to === from) {
+        // A self-edge would loop the trace; excluded on purpose, but never
+        // silently: it still counts as a skipped site below.
+        self = true
         break
       }
+      hit = to
+      break
     }
+    if (self) {
+      skip(from, 'self-call')
+      continue
+    }
+    if (!hit) {
+      skip(from, 'ambiguous-callee')
+      continue
+    }
+    targets.push({ from, to: hit })
+    bucket(from).matched += 1
   }
-  return targets
+  return { targets, resolution }
 }
 
 /**
@@ -482,10 +550,15 @@ export function desiredSourceEdgeKeys(edges) {
  * (attributes are numeric-only). Written under the label dir as a mirror
  * of the repo-relative path, one .md per file that has symbols.
  */
-export function labelContent(rel, symbols) {
+export function labelContent(rel, symbols, resolution = null) {
   const lines = [`# ${rel}`, '']
   for (const symbol of symbols) {
-    lines.push(`- \`${symbol.name}\` (${symbol.kind}, line ${symbol.line})`)
+    const info = resolution?.get(symbol.id)
+    const note = info ? ` calls ${info.matched} linked, ${info.skipped} skipped` : ''
+    const reasons = info && info.skipped
+      ? ' (' + Object.entries(info.skippedReasons).map(([reason, count]) => `${reason} ${count}`).join(', ') + ')'
+      : ''
+    lines.push(`- \`${symbol.name}\` (${symbol.kind}, line ${symbol.line})${note}${reasons}`)
   }
   return lines.join('\n') + '\n'
 }
@@ -495,13 +568,15 @@ export function labelContent(rel, symbols) {
  * write files whose content changed, delete files whose file or last
  * symbol is gone. Generated files only; never touches anything else.
  */
-export async function writeLabelFiles(rootAbs, labelDir = DEFAULT_LABEL_DIR, symbolsByFile) {
+export async function writeLabelFiles(rootAbs, labelDir = DEFAULT_LABEL_DIR, symbolsByFile, resolutionByFile = new Map()) {
   const base = path.resolve(rootAbs, labelDir)
   if (base !== rootAbs && !base.startsWith(rootAbs + path.sep)) {
     throw new Error(`labelDir "${labelDir}" resolves outside the project root`)
   }
   const expected = new Map()
-  for (const [rel, symbols] of symbolsByFile) expected.set(rel, labelContent(rel, symbols))
+  for (const [rel, symbols] of symbolsByFile) {
+    expected.set(rel, labelContent(rel, symbols, resolutionByFile.get(rel)))
+  }
 
   const existing = new Set()
   const walk = async (dir, rel) => {
@@ -564,7 +639,7 @@ export async function writeLabelFiles(rootAbs, labelDir = DEFAULT_LABEL_DIR, sym
  *   files, symbols, edges, labels}>}
  */
 export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir, include = null, exclude = null } = {}) {
-  const { nodes, edges, symbolsByFile } = await buildSourcesGraph(rootAbs, null, { include, exclude })
+  const { nodes, edges, symbolsByFile, callResolution, fileBytes } = await buildSourcesGraph(rootAbs, null, { include, exclude })
   const desired = desiredSourceEdgeKeys(edges)
   const diskIds = new Set(nodes.map((node) => node.id))
 
@@ -701,7 +776,7 @@ export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir, include
     if (!live.has(from) || !live.has(to)) orphans += 1
   }
 
-  const labels = await writeLabelFiles(rootAbs, labelDir || DEFAULT_LABEL_DIR, symbolsByFile)
+  const labels = await writeLabelFiles(rootAbs, labelDir || DEFAULT_LABEL_DIR, symbolsByFile, callResolution)
 
   const files = nodes.filter((node) => node.type === 'file').length
   const symbols = nodes.filter((node) => node.type === 'symbol').length
@@ -715,6 +790,7 @@ export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir, include
     files,
     symbols,
     edges: desired.size / 2,
+    bytes: fileBytes,
     labels: { written: labels.written.length, deleted: labels.deleted.length }
   }
 }
@@ -724,12 +800,16 @@ export async function syncSourcesToAnchorDB(client, rootAbs, { labelDir, include
  * imports/imported_by, symbols (ids containing '#') walk calls/called_by.
  * causalChain is direct-only, so hops beyond one are walked level by
  * level. Returns [id, hop] entries per direction; callers shape the
- * response.
+ * response. A thrown causalChain call is a connection-level failure, not
+ * an empty result: the first error is returned as serverError so callers
+ * can report "server unavailable" instead of letting a dead server read
+ * as "no callers".
  */
 export async function traceSources(client, target, direction = 'both', maxHops = 2) {
   const symbol = target.includes('#')
   const outRelation = symbol ? 'calls' : 'imports'
   const inRelation = symbol ? 'called_by' : 'imported_by'
+  let serverError = null
   const walk = async (start, relation) => {
     const seen = new Map()
     let frontier = [start]
@@ -739,7 +819,8 @@ export async function traceSources(client, target, direction = 'both', maxHops =
         let rows
         try {
           rows = await client.causalChain([node], relation, 1000)
-        } catch {
+        } catch (err) {
+          serverError = serverError || err?.message || String(err)
           continue
         }
         for (const row of rows || []) {
@@ -756,7 +837,62 @@ export async function traceSources(client, target, direction = 'both', maxHops =
   }
   const out = direction === 'in' ? [] : await walk(target, outRelation)
   const inc = direction === 'out' ? [] : await walk(target, inRelation)
-  return { out, in: inc }
+  return { out, in: inc, serverError }
+}
+
+/**
+ * Sync-state of the sources model: ~/.knlview/sync-state/<model>.json.
+ * Written after every sync so a later trace can (a) date the graph (asOf)
+ * and (b) detect staleness against a fresh disk count. A missing or
+ * broken file means "never synced": trace reports asOf null rather than
+ * inventing a date.
+ */
+export async function readSourcesSyncState(model, home = null, options = {}) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(syncStatePath(model, home, options), 'utf8'))
+    if (parsed?.model !== model || !Number.isInteger(parsed.files)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+export async function writeSourcesSyncState(model, { files, symbols, edges, bytes }, home = null, options = {}) {
+  try {
+    const file = syncStatePath(model, home, options)
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(
+      file,
+      JSON.stringify({ model, syncedAt: new Date().toISOString(), files, symbols, edges, bytes }),
+      'utf8'
+    )
+  } catch {
+    // State write failed: the sync itself still counts, the next trace
+    // just reports asOf null and no staleness signal.
+  }
+}
+
+/**
+ * Drift sensor: a coarse aggregate, not a per-file diff and not proof of
+ * freshness. Compare the file count and total size on disk now against
+ * what sync stored; a drift of at most 1 unit is noise (an in-progress
+ * edit, or one KB of rounding - the scanner stores sizes as whole KB).
+ * Content changes that keep both totals are invisible here. The name says
+ * suspect on purpose: it flags "worth re-syncing", never certifies fresh,
+ * and it never affects exit codes; only the server-unreachable check may
+ * fail a run (--strict).
+ */
+export function staleWarning(state, diskFiles, diskBytes = null) {
+  if (!state || !Number.isInteger(state.files) || !Number.isInteger(diskFiles)) return null
+  const parts = []
+  const fileDiff = Math.abs(diskFiles - state.files)
+  if (fileDiff > 1) parts.push(`${fileDiff} files differ`)
+  if (Number.isInteger(diskBytes) && Number.isInteger(state.bytes)) {
+    const byteDiff = Math.abs(diskBytes - state.bytes)
+    if (byteDiff > 1) parts.push(`${byteDiff} KB differ`)
+  }
+  if (!parts.length) return null
+  return `graph drift-suspect: ${parts.join(', ')} since last sync`
 }
 
 /**

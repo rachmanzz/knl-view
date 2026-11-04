@@ -160,6 +160,8 @@ ${fallback}## Strict Anti-Grep & Mandatory Trace-Before-Edit Protocol (Universal
 - For third-party libraries and dependencies (\`node_modules\`, \`go mod\`, \`site-packages\`, \`crates\`): NEVER read raw library files directly. Build and query the module graph on-demand: run \`knl-view modules build-graph <eco>::<module_name>\` (e.g. \`npm::express\`, \`go::github.com/gin-gonic/gin\`), then inspect API definitions and call hierarchies via \`knl-view modules trace <eco>::<module_name> [symbol]\` to save context tokens.
 - Route all graph reads and writes through KNL-View's documented CLI, viewer, or application endpoints. Never connect to AnchorDB directly through AnchorWire, its CLI, direct database endpoints, files, SQL, or custom clients/scripts. If KNL-View cannot perform a requested operation, explain the limitation; do not bypass it.
 - Keep graph work targeted: specify the relevant node/path, direction, and smallest useful hop count; summarize only relevant nodes and edges; avoid dumping whole graphs or large raw JSON.
+- \`in: []\` on a symbol trace does not mean "no callers" until the function body has been read. The \`resolution\` field explains which call sites the resolver skipped and why.
+- The graph organizes relations, not behavior. Behavior claims are verified by reading the code and running tests, not by querying the graph.
 - Follow the KNL-View skill's trace-before-edit and \`sources sync\`-after-change rules. Treat edge direction as lineage; do not claim causality without separate evidence.
 <!-- knl-view:end -->`
 }
@@ -438,6 +440,11 @@ a line suffix \`<path>#<name>@<line>\`), kinds are \`function\`,
 directions stored. Call resolution is conservative: the call belongs to
 its innermost enclosing symbol and the callee must match exactly one
 definition project-wide; ambiguous names are skipped, never guessed.
+An \`in: []\` on a symbol trace does not mean "no callers" until the
+function body has been read; the trace's \`resolution\` field explains
+which call sites the resolver skipped and why. The graph organizes
+relations, not behavior: claims about behavior are verified by reading
+the code and running tests, not by querying the graph.
 Label text (symbol names and kinds; AnchorDB attributes are
 numeric-only) lives in \`.knowledges/.knl-data/<path>.md\`, one file per
 source file that has symbols; override with \`labelDir\` in the project

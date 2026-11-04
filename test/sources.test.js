@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
+import { spawnSync } from 'node:child_process'
 import {
   scanSourceFiles,
   resolveImportSpecifier,
@@ -12,11 +13,15 @@ import {
   resolveRustSpecifiers,
   goModulePath,
   buildSourcesGraph,
+  resolveCallTargets,
   desiredSourceEdgeKeys,
   labelContent,
   writeLabelFiles,
   syncSourcesToAnchorDB,
   traceSources,
+  readSourcesSyncState,
+  writeSourcesSyncState,
+  staleWarning,
   collectorHttpUrl,
   purgeArchivedRecords,
   SOURCE_RELATIONS
@@ -32,6 +37,53 @@ function write(root, rel, content) {
   const abs = path.join(root, rel)
   fs.mkdirSync(path.dirname(abs), { recursive: true })
   fs.writeFileSync(abs, content, 'utf8')
+}
+
+// Stateful fake client: links, records, and walks mutate one shared
+// state, so several syncs run against the same "server" like in real use.
+function statefulClient() {
+  const records = new Map()
+  const operations = new Map()
+  const edges = new Map()
+  const ops = { linked: [], unlinked: [], saved: [], batches: [] }
+  return {
+    ops,
+    records,
+    operations,
+    edges,
+    async list() {
+      const items = [...records]
+        .filter(([name]) => operations.get(name) !== 2)
+        .map(([name, props]) => ({ name, props }))
+      return { totalCount: items.length, hasMore: false, items }
+    },
+    async causalChain([seed], relation) {
+      return (edges.get(`${seed}\u0000${relation}`) || []).map((word) => ({ word }))
+    },
+    async link(from, type, to) {
+      const key = `${from}\u0000${type}`
+      edges.set(key, [...(edges.get(key) || []), to])
+      ops.linked.push(`${from}\u0000${type}\u0000${to}`)
+    },
+    async unlink(from, type, to) {
+      const key = `${from}\u0000${type}`
+      edges.set(key, (edges.get(key) || []).filter((word) => word !== to))
+      ops.unlinked.push(`${from}\u0000${type}\u0000${to}`)
+    },
+    async saveWithID(name, props) {
+      records.set(name, props)
+      operations.set(name, 1)
+      ops.saved.push(name)
+    },
+    async saveBatch(items) {
+      for (const item of items) {
+        records.set(item.name, item.props)
+        operations.set(item.name, item.operation ?? 1)
+        ops.saved.push(item.name)
+      }
+      ops.batches.push(items.length)
+    }
+  }
 }
 
 describe('scanSourceFiles', () => {
@@ -584,53 +636,6 @@ describe('desiredSourceEdgeKeys', () => {
 })
 
 describe('syncSourcesToAnchorDB', () => {
-  // Stateful fake client: links, records, and walks mutate one shared
-  // state, so several syncs run against the same "server" like in real use.
-  function statefulClient() {
-    const records = new Map()
-    const operations = new Map()
-    const edges = new Map()
-    const ops = { linked: [], unlinked: [], saved: [], batches: [] }
-    return {
-      ops,
-      records,
-      operations,
-      edges,
-      async list() {
-        const items = [...records]
-          .filter(([name]) => operations.get(name) !== 2)
-          .map(([name, props]) => ({ name, props }))
-        return { totalCount: items.length, hasMore: false, items }
-      },
-      async causalChain([seed], relation) {
-        return (edges.get(`${seed}\u0000${relation}`) || []).map((word) => ({ word }))
-      },
-      async link(from, type, to) {
-        const key = `${from}\u0000${type}`
-        edges.set(key, [...(edges.get(key) || []), to])
-        ops.linked.push(`${from}\u0000${type}\u0000${to}`)
-      },
-      async unlink(from, type, to) {
-        const key = `${from}\u0000${type}`
-        edges.set(key, (edges.get(key) || []).filter((word) => word !== to))
-        ops.unlinked.push(`${from}\u0000${type}\u0000${to}`)
-      },
-      async saveWithID(name, props) {
-        records.set(name, props)
-        operations.set(name, 1)
-        ops.saved.push(name)
-      },
-      async saveBatch(items) {
-        for (const item of items) {
-          records.set(item.name, item.props)
-          operations.set(item.name, item.operation ?? 1)
-          ops.saved.push(item.name)
-        }
-        ops.batches.push(items.length)
-      }
-    }
-  }
-
   test('first sync links both directions and saves every record', async () => {
     const root = makeRepo()
     write(root, 'a.js', "import './b.js'\n")
@@ -640,7 +645,7 @@ describe('syncSourcesToAnchorDB', () => {
 
     assert.deepEqual(result, {
       linked: 2, unlinked: 0, saved: 2, tombstoned: 0, failed: 0, orphans: 0,
-      files: 2, symbols: 0, edges: 1, labels: { written: 0, deleted: 0 }
+      files: 2, symbols: 0, edges: 1, bytes: 1, labels: { written: 0, deleted: 0 }
     })
     assert.ok(client.ops.linked.includes('a.js\u0000imports\u0000b.js'))
     assert.ok(client.ops.linked.includes('b.js\u0000imported_by\u0000a.js'))
@@ -790,51 +795,6 @@ describe('syncSourcesToAnchorDB', () => {
 })
 
 describe('symbol graph', () => {
-  function statefulClient() {
-    const records = new Map()
-    const operations = new Map()
-    const edges = new Map()
-    const ops = { linked: [], unlinked: [], saved: [], batches: [] }
-    return {
-      ops,
-      records,
-      operations,
-      edges,
-      async list() {
-        const items = [...records]
-          .filter(([name]) => operations.get(name) !== 2)
-          .map(([name, props]) => ({ name, props }))
-        return { totalCount: items.length, hasMore: false, items }
-      },
-      async causalChain([seed], relation) {
-        return (edges.get(`${seed}\u0000${relation}`) || []).map((word) => ({ word }))
-      },
-      async link(from, type, to) {
-        const key = `${from}\u0000${type}`
-        edges.set(key, [...(edges.get(key) || []), to])
-        ops.linked.push(`${from}\u0000${type}\u0000${to}`)
-      },
-      async unlink(from, type, to) {
-        const key = `${from}\u0000${type}`
-        edges.set(key, (edges.get(key) || []).filter((word) => word !== to))
-        ops.unlinked.push(`${from}\u0000${type}\u0000${to}`)
-      },
-      async saveWithID(name, props) {
-        records.set(name, props)
-        operations.set(name, 1)
-        ops.saved.push(name)
-      },
-      async saveBatch(items) {
-        for (const item of items) {
-          records.set(item.name, item.props)
-          operations.set(item.name, item.operation ?? 1)
-          ops.saved.push(item.name)
-        }
-        ops.batches.push(items.length)
-      }
-    }
-  }
-
   test('buildSourcesGraph emits symbol nodes, defines, and unique-name calls', async () => {
     const root = makeRepo()
     write(root, 'main.js', "import { boot } from './lib/boot.js'\nfunction start() { boot() }\n")
@@ -1020,11 +980,13 @@ describe('symbol graph', () => {
 
     // The symbol disappears from the file: its record is tombstoned and
     // its label file is deleted (the file no longer defines any symbol).
+    // main.js's label is rewritten too: its call to boot() flips from
+    // "1 linked" to "1 skipped (ambiguous-callee)" in the resolution note.
     write(root, 'lib/boot.js', '')
     const second = await syncSourcesToAnchorDB(client, root)
     assert.equal(second.tombstoned, 1)
     assert.equal(client.records.get('lib/boot.js#boot').tombstone, 2)
-    assert.deepEqual(second.labels, { written: 0, deleted: 1 })
+    assert.deepEqual(second.labels, { written: 1, deleted: 1 })
     assert.ok(!fs.existsSync(path.join(root, '.knowledges/.knl-data/lib/boot.js.md')))
 
     // The file disappears too: its own record is tombstoned as well.
@@ -1066,11 +1028,236 @@ describe('traceSources', () => {
     assert.deepEqual(symbolTrace.out, [['lib/boot.js#boot', 1]])
     assert.deepEqual(symbolTrace.in, [])
   })
+
+  test('a dead server reads as serverError, not as "no callers"', async () => {
+    const dead = {
+      async causalChain() {
+        throw new Error('ECONNREFUSED')
+      }
+    }
+    const trace = await traceSources(dead, 'main.js', 'both', 2)
+    assert.deepEqual(trace.out, [])
+    assert.deepEqual(trace.in, [])
+    assert.equal(trace.serverError, 'ECONNREFUSED')
+  })
+
+  test('a live server reports serverError null', async () => {
+    const trace = await traceSources(chainClient([
+      ['main.js', 'imports', 'lib/boot.js'],
+      ['lib/boot.js', 'imported_by', 'main.js']
+    ]), 'main.js', 'both', 2)
+    assert.equal(trace.serverError, null)
+    assert.deepEqual(trace.out, [['lib/boot.js', 1]])
+  })
+})
+
+describe('sources sync-state and staleness', () => {
+  test('write then read round-trips; a foreign model reads as null', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'knl-state-'))
+    try {
+      await writeSourcesSyncState('sources', { files: 57, symbols: 333, edges: 851, bytes: 4096 }, home)
+      const state = await readSourcesSyncState('sources', home)
+      assert.equal(state.model, 'sources')
+      assert.equal(state.files, 57)
+      assert.equal(state.symbols, 333)
+      assert.equal(state.edges, 851)
+      assert.equal(state.bytes, 4096)
+      assert.match(state.syncedAt, /^\d{4}-\d{2}-\d{2}T/)
+
+      assert.equal(await readSourcesSyncState('other-model', home), null)
+      assert.equal(await readSourcesSyncState('missing', path.join(home, 'nope')), null)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test('drift warning fires only past one unit of drift, with the exact counts', () => {
+    const state = { model: 'sources', syncedAt: '2026-11-04T08:00:00Z', files: 57, symbols: 333, edges: 851, bytes: 4096 }
+    assert.equal(staleWarning(state, 58, 4096), null)
+    assert.equal(staleWarning(state, 56, 4097), null)
+    assert.equal(
+      staleWarning(state, 59, 4096),
+      'graph drift-suspect: 2 files differ since last sync'
+    )
+    assert.equal(
+      staleWarning(state, 57, 4100),
+      'graph drift-suspect: 4 KB differ since last sync'
+    )
+    assert.equal(
+      staleWarning(state, 60, 4200),
+      'graph drift-suspect: 3 files differ, 104 KB differ since last sync'
+    )
+    // An old sync-state without bytes: the file count still guards alone.
+    assert.equal(
+      staleWarning({ model: 'sources', files: 57 }, 60),
+      'graph drift-suspect: 3 files differ since last sync'
+    )
+    assert.equal(staleWarning(null, 57, 4096), null)
+    assert.equal(staleWarning(state, undefined, 4096), null)
+  })
+})
+
+describe('same-file receiver resolution', () => {
+  test('sources.trace.receiver-same-file: methods on own types link from the same file', async () => {
+    const root = makeRepo()
+    write(root, 'sup.js', [
+      'class Supervisor {',
+      '  start() { return 1 }',
+      '}',
+      'function runIt() {',
+      '  Supervisor.start()',
+      '  bogus.start()',
+      '}'
+    ].join('\n'))
+
+    const { edges } = await buildSourcesGraph(root)
+    const calls = edges.filter((e) => e.type === 'calls').map((e) => `${e.from}->${e.to}`).sort()
+    assert.deepEqual(calls, [
+      'sup.js#runIt->sup.js#Supervisor.start'
+    ])
+  })
+
+  test('sources.trace.skipped-reason: matched plus skipped covers every call site', () => {
+    const symbolIndex = new Map([
+      ['Supervisor.start', ['a.js#Supervisor.start']],
+      ['run', ['a.js#run']]
+    ])
+    const file = {
+      ext: '.js',
+      importNames: [],
+      symbols: [
+        { name: 'Supervisor', kind: 'class', line: 1, lines: 3, id: 'a.js#Supervisor' },
+        { name: 'run', kind: 'function', line: 4, lines: 4, id: 'a.js#run' }
+      ],
+      calls: [
+        { name: 'start', recv: 'Supervisor', row: 4 },
+        { name: 'start', recv: 'w', row: 4 },
+        { name: 'missing', recv: null, row: 4 },
+        { name: 'run', recv: null, row: 4 }
+      ]
+    }
+
+    const { targets, resolution } = resolveCallTargets('a.js', file, symbolIndex, {})
+    assert.deepEqual(targets, [{ from: 'a.js#run', to: 'a.js#Supervisor.start' }])
+    assert.deepEqual(resolution.get('a.js#run'), {
+      matched: 1,
+      skipped: 3,
+      skippedReasons: { 'local-receiver': 1, 'ambiguous-callee': 1, 'self-call': 1 }
+    })
+  })
+
+  test('unresolvable qualified names count as skipped, not matched', () => {
+    const symbolIndex = new Map([
+      ['Supervisor.start', ['lib/x.js#Supervisor.start', 'lib2/o.js#Supervisor.start']]
+    ])
+    const file = {
+      ext: '.js',
+      importNames: [],
+      symbols: [
+        { name: 'Supervisor', kind: 'class', line: 1, lines: 2, id: 'a.js#Supervisor' },
+        { name: 'run', kind: 'function', line: 3, lines: 2, id: 'a.js#run' }
+      ],
+      calls: [{ name: 'start', recv: 'Supervisor', row: 3 }]
+    }
+
+    const { targets, resolution } = resolveCallTargets('a.js', file, symbolIndex, {})
+    assert.deepEqual(targets.map(e=>e.to), [])
+    assert.equal(resolution.get('a.js#run').matched, 0)
+    assert.equal(resolution.get('a.js#run').skipped, 1)
+    assert.equal(resolution.get('a.js#run').skippedReasons['ambiguous-callee'], 1)
+  })
+
+  test('label files carry the resolution note', () => {
+    const resolution = new Map([
+      ['main.js#start', { matched: 1, skipped: 2, skippedReasons: { 'local-receiver': 2 } }]
+    ])
+    const text = labelContent('main.js', [
+      { name: 'start', kind: 'function', line: 1, lines: 3, id: 'main.js#start' }
+    ], resolution)
+    assert.equal(text, '# main.js\n\n- `start` (function, line 1) calls 1 linked, 2 skipped (local-receiver 2)\n')
+  })
+
+  test('sync persists the note into the label file', async () => {
+    const root = makeRepo()
+    try {
+      write(root, 'sup.js', [
+        'class Supervisor {',
+        '  start() {}',
+        '}',
+        'function run() {',
+        '  w.start()',
+        '  bogus.start()',
+        '}'
+      ].join('\n'))
+      const client = statefulClient()
+      await syncSourcesToAnchorDB(client, root)
+      const text = fs.readFileSync(path.join(root, '.knowledges/.knl-data/sup.js.md'), 'utf8')
+      assert.ok(text.includes('- `Supervisor` (class, line 1)\n'))
+      assert.ok(text.includes('- `run` (function, line 4) calls 0 linked, 2 skipped (local-receiver 2)\n'))
+      // Idempotent: an unchanged second sync rewrites nothing.
+      const second = await syncSourcesToAnchorDB(client, root)
+      assert.deepEqual(second.labels, { written: 0, deleted: 0 })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('SOURCE_RELATIONS', () => {
   test('the two mirrored directions', () => {
     assert.deepEqual(SOURCE_RELATIONS, ['imports', 'imported_by'])
+  })
+})
+
+describe('sources trace CLI honesty', () => {
+  // A fake HOME whose AnchorDB points at a dead port: the CLI must still
+  // print the local trace with server "unavailable" (exit 0), and only
+  // --strict turns that into a failure.
+  function deadHome() {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'knl-cli-'))
+    fs.mkdirSync(path.join(home, '.knlview'), { recursive: true })
+    fs.writeFileSync(
+      path.join(home, '.knlview', 'knl-config.json'),
+      JSON.stringify({ anchordb: { url: 'wire://127.0.0.1:1', token: 'x', sync: false } }),
+      'utf8'
+    )
+    return home
+  }
+
+  test('default: local trace still prints, server unavailable, exit 0', () => {
+    const home = deadHome()
+    try {
+      const res = spawnSync(process.execPath, [path.resolve('bin/knl-view.js'),
+        'sources', 'trace', '--target=README.md'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home },
+        timeout: 60000
+      })
+      assert.equal(res.status, 0, res.stderr)
+      const data = JSON.parse(res.stdout)
+      assert.equal(data.server, 'unavailable')
+      assert.equal(data.asOfSource, 'local')
+      assert.match(res.stderr, /sources graph unavailable/)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test('--strict: same output, exit 1', () => {
+    const home = deadHome()
+    try {
+      const res = spawnSync(process.execPath, [path.resolve('bin/knl-view.js'),
+        'sources', 'trace', '--target=README.md', '--strict'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home },
+        timeout: 60000
+      })
+      assert.equal(res.status, 1)
+      assert.equal(JSON.parse(res.stdout).server, 'unavailable')
+      assert.match(res.stderr, /sources graph unavailable/)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
   })
 })
 

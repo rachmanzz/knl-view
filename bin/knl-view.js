@@ -21,7 +21,7 @@ import {
 } from '../server/consensus.js'
 import { readProjectConfig, readGlobalConfig, projectSlug, anchordbClientOptions, resolveModel, resolveSettings, knlGlobalDir, globalConfigPath } from '../server/config.js'
 import { createAnchorWireClient, mirrorStillValid } from '../server/graph/anchordb_client.js'
-import { syncSourcesToAnchorDB, traceSources, purgeArchivedRecords } from '../server/graph/sources.js'
+import { syncSourcesToAnchorDB, traceSources, purgeArchivedRecords, readSourcesSyncState, writeSourcesSyncState, staleWarning, buildSourcesGraph } from '../server/graph/sources.js'
 import {
   parseModuleSpecifier,
   buildModuleGraph,
@@ -114,7 +114,13 @@ Commands:
   sources collect           Purge archived (tombstoned) records of the
                             "sources" model via the REST collector
   sources trace --target=<path>  File lineage over the sources graph
-                            (--hops, --direction in|out|both)
+                            (--hops, --direction in|out|both). Output is
+                            dated (asOf from local sync-state), warns on
+                            staleness, and carries per-symbol resolution
+                            stats. --strict exits non-zero when AnchorDB
+                            is unreachable; the default prints the local
+                            result with server: "unavailable" and a stderr
+                            warning instead
   modules build-graph <target>  Build & sync external module graph into global
                             AnchorDB model (modules-<eco>) on-demand
                             Target: <eco>::<module_name> (e.g. npm::express)
@@ -173,6 +179,7 @@ try {
       target: { type: 'string' },
       direction: { type: 'string' },
       hops: { type: 'string', default: '2' },
+      strict: { type: 'boolean', default: false },
       force: { type: 'boolean', default: false },
       init: { type: 'boolean', default: false },
       structure: { type: 'string', default: 'standard' },
@@ -274,7 +281,10 @@ if (consensusSub) {
 const sourcesSub = positionals?.[0] === 'sources' ? positionals?.[1] : null
 if (sourcesSub) {
   try {
-    await runSourcesCommand(sourcesSub, values, { settings })
+    // The trace handler may return 1 (--strict with an unreachable
+    // server); every other path returns undefined, which exits 0.
+    const code = await runSourcesCommand(sourcesSub, values, { settings })
+    process.exit(code === 1 ? 1 : 0)
   } catch (err) {
     fail(`Sources command failed: ${err.message}`)
   }
@@ -1326,7 +1336,18 @@ async function runSourcesCommand(sub, values, { settings }) {
       'Run: knl-view model new sources')
   }
   const base = anchordbClientOptions(settings.anchordb)
-  const client = await createAnchorWireClient({ ...base, model: sourcesModel })
+  let client
+  try {
+    client = await createAnchorWireClient({ ...base, model: sourcesModel })
+  } catch (err) {
+    if (sub !== 'trace') throw err
+    // Trace degrades honestly instead of dying: the walk reports
+    // server: "unavailable" while the local scan still runs. Sync and
+    // collect keep failing fast; without the server they have nothing
+    // truthful to do.
+    const message = err.message
+    client = { async causalChain() { throw new Error(message) } }
+  }
   const projectRoot = process.cwd()
 
   if (sub === 'sync') {
@@ -1352,6 +1373,14 @@ async function runSourcesCommand(sub, values, { settings }) {
     if (result.failed) {
       process.stderr.write('knl-view: some operations failed; run "knl-view sources sync" again to retry.\n')
     }
+    // Date the graph and arm the staleness sensor: trace reads this state
+    // back (asOf) and compares file counts against a fresh disk scan.
+    await writeSourcesSyncState(sourcesModel, {
+      files: result.files,
+      symbols: result.symbols,
+      edges: result.edges,
+      bytes: result.bytes
+    })
     if (result.tombstoned) {
       await runSourcesCollector(base, sourcesModel, { quiet: false })
     }
@@ -1367,7 +1396,7 @@ async function runSourcesCommand(sub, values, { settings }) {
   if (sub === 'trace') {
     const target = values.target
     if (!target) {
-      fail('Parameter --target is required:\n  knl-view sources trace --target=<repo-relative path> [--hops=2] [--direction=in|out|both]')
+      fail('Parameter --target is required:\n  knl-view sources trace --target=<repo-relative path> [--hops=2] [--direction=in|out|both] [--strict]')
     }
     let direction = 'both'
     if (values.direction !== undefined) {
@@ -1378,14 +1407,47 @@ async function runSourcesCommand(sub, values, { settings }) {
     }
     const hops = Number.parseInt(values.hops || '2', 10)
     const maxHops = Number.isInteger(hops) && hops > 0 ? hops : 2
-    const { out, in: inc } = await traceSources(client, target, direction, maxHops)
+    const { out, in: inc, serverError } = await traceSources(client, target, direction, maxHops)
+    // Local scan alongside the server walk: it dates the graph (asOf from
+    // sync-state), arms the staleness sensor, and attaches per-symbol
+    // resolution stats. A dead server degrades the walk, never the scan.
+    const local = await buildSourcesGraph(projectRoot, null, {
+      include: settings.include,
+      exclude: settings.exclude
+    })
+    const diskFiles = local.nodes.filter((node) => node.type === 'file').length
+    const syncState = await readSourcesSyncState(sourcesModel)
+    const warnings = []
+    const stale = staleWarning(syncState, diskFiles, local.fileBytes)
+    if (stale) warnings.push(stale)
+    // Resolution per symbol node: matched + skipped covers every call site
+    // in that symbol's body, so an empty in: [] can no longer pass as
+    // "no callers" when the resolver skipped sites instead of linking them.
+    const resolveFor = (id) => {
+      if (!id.includes('#')) return undefined
+      const rel = id.slice(0, id.indexOf('#'))
+      const entry = local.callResolution.get(rel)?.get(id)
+      return entry ? { ...entry, skippedReasons: { ...entry.skippedReasons } } : undefined
+    }
     process.stdout.write(JSON.stringify({
       center: target,
+      asOf: syncState?.syncedAt ?? null,
+      asOfSource: 'local',
+      server: serverError ? 'unavailable' : 'reachable',
       maxHops,
       direction,
-      out: out.map(([id, hop]) => ({ id, hop })),
-      in: inc.map(([id, hop]) => ({ id, hop }))
+      out: out.map(([id, hop]) => ({ id, hop, resolution: resolveFor(id) })),
+      in: inc.map(([id, hop]) => ({ id, hop, resolution: resolveFor(id) }))
     }, null, 2) + '\n')
+    if (serverError) {
+      process.stderr.write(`knl-view: sources graph unavailable (${serverError}).\n`)
+    }
+    for (const warning of warnings) {
+      process.stderr.write(`knl-view: ${warning}.\n`)
+    }
+    // Strict mode is for audits: a pipeline must stop as loudly as the
+    // original ECONNREFUSED. Staleness never changes the exit code.
+    if (values.strict && serverError) return 1
     return
   }
 
@@ -1393,7 +1455,7 @@ async function runSourcesCommand(sub, values, { settings }) {
     'Usage:\n' +
     '  knl-view sources sync\n' +
     '  knl-view sources collect\n' +
-    '  knl-view sources trace --target=<repo-relative path> [--hops=2] [--direction=in|out|both]')
+    '  knl-view sources trace --target=<repo-relative path> [--hops=2] [--direction=in|out|both] [--strict]')
 }
 
 // Wire cannot start collector jobs, so archived records are purged over
