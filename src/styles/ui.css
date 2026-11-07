@@ -234,7 +234,7 @@
   color: var(--ink-2);
 }
 
-/* --- Hasil filter --- */
+/* --- Filter results --- */
 
 .nav-list .nav-result {
   display: block;
@@ -670,7 +670,7 @@
 }
 
 /* ============================================================
-   Pager dokumen
+   Document pager
    ============================================================ */
 
 .doc-pager {
@@ -884,7 +884,7 @@
   }
 }
 
-/* --- Modal zoom diagram mermaid --- */
+/* --- Mermaid diagram zoom modal --- */
 
 .mermaid-modal {
   position: fixed;

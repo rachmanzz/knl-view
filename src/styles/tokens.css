@@ -129,7 +129,7 @@ a:hover {
   border-radius: 0;
 }
 
-/* --- Utilitas --- */
+/* --- Utilities --- */
 
 .sr-only {
   position: absolute;
@@ -163,7 +163,7 @@ a:hover {
   color: var(--paper);
 }
 
-/* --- Gerak: hormati preferensi sistem --- */
+/* --- Motion: respect system preferences --- */
 
 @media (prefers-reduced-motion: reduce) {
   *,
