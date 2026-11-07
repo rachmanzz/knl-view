@@ -247,7 +247,7 @@ Each file also defines **symbol nodes**, extracted from the same parse:
 - Symbol ids are `<path>#<name>`; class methods are `Class.method`. A name defined more than once in one file gets a line suffix (`<path>#<name>@<line>`), so duplicate helpers stay distinct records.
 - Kinds: `function`, `class`, `method`, `type`, `interface`, `enum`, `struct`, `trait`.
 - Edges: `defines`/`defined_in` (file → symbol) and `calls`/`called_by` (symbol → symbol), each stored in both directions because causalChain walks forward only.
-- Call resolution is conservative: a call belongs to its innermost enclosing symbol, and the callee must match exactly one definition project-wide (same package directory preferred in Go). A receiver-qualified call (`obj.Method()`) resolves when the receiver is an import binding of the file or names a class-like type declared in the same file; otherwise it is skipped, never guessed.
+- Call resolution is conservative: a call belongs to its innermost enclosing symbol, and the callee must match exactly one definition project-wide (same package directory preferred in Go). A receiver-qualified call (`obj.Method()`) resolves when the receiver is an import binding of the file, names a class-like type declared in the same file, is `this`/`self` or the method's declared receiver parameter (e.g. `s.method()` in Go), or matches a known type name case-insensitively (`stitcher.RegisterRoute()` to `Stitcher.RegisterRoute`); otherwise it is skipped as `local-receiver`, never guessed.
 - Label text (symbol names and kinds; AnchorDB attributes are numeric-only) is written to `.knowledges/.knl-data/<path>.md`, one file per source file that has symbols; override the location with `labelDir` in the project config. Labels are regenerated and pruned on every sync.
 
 #### Supported Languages (v0.3.3)
@@ -280,7 +280,7 @@ knl-view sources trace --target=server/index.js --direction=out --hops=2
 knl-view sources trace --target=server/index.js#handleTrace --direction=in
 ```
 
-`sync` is idempotent: run it again after refactoring and only the difference is applied. A target containing `#` traces symbol lineage over `calls`/`called_by`; a plain path traces file lineage over `imports`/`imported_by`. Records the disk no longer has are archived with the native lifecycle opcode 2 (TOMBSTONE: the server hides them from list and lookups) after their edges are unlinked, and the `tombstone = 2` attribute stays as a marker for servers that predate opcode support. `sync` then asks the REST collector to purge those records physically (scoped to the model); run `knl-view sources collect` by hand if the REST endpoint was unreachable at that moment. A reappearing file revives the record with a normal save and relinks its edges. Sync reports `ORPHAN EDGES` when an edge endpoint failed to save, so a broken sync is never silent. The read-only HTTP endpoint answers the same queries: `GET /api/sources/trace?target=<id>&direction=in|out|both&hops=N`.
+`sync` is idempotent: run it again after refactoring and only the difference is applied. A target containing `#` traces symbol lineage over `calls`/`called_by`; a plain path traces file lineage over `imports`/`imported_by`. Records the disk no longer has are archived with the native lifecycle opcode 2 (TOMBSTONE: the server hides them from list and lookups) after their edges are unlinked, and the `tombstone = 2` attribute stays as a marker for servers that predate opcode support. `sync` then asks the REST collector to purge those records physically (scoped to the model); run `knl-view sources collect` by hand if the REST endpoint was unreachable at that moment. A reappearing file revives the record with a normal save and relinks its edges. Sync reports `ORPHAN EDGES` when an edge endpoint failed to save, so a broken sync is never silent. The read-only HTTP endpoint answers the same queries: `GET /api/sources/trace?target=<id>&direction=in|out|both&hops=N`, returning the shared honesty envelope (`asOf`, `asOfSource`, `server`, `warnings`).
 
 ### External Modules Graph (On-Demand Module Boundary)
 
@@ -313,7 +313,7 @@ When `knl-view` is running as a local server:
 - `GET /api/graph/trace?target=<id>&hops=2`: Returns an isolated $N$-hop neighborhood subgraph for AI agents or interactive visualization.
 - `GET /api/anchordb/trace?target=<id>&hops=2`: Returns a causal chain traced on the AnchorDB server (requires the global `anchordb` config block). Returns `503` when AnchorDB is off or unreachable.
 - `GET /api/consensus?target=<claimId>`: Read-only consensus status for one claim (requires AnchorDB and a mapped `consensus` role). Returns `503` when AnchorDB is off or the role is unmapped, `400` without a target.
-- `GET /api/sources/trace?target=<path>&direction=in|out&hops=2`: Read-only file lineage over the whole-project sources graph (requires AnchorDB and a mapped `sources` role). Returns `503` when unavailable, `400` without a target or with a bad direction.
+- `GET /api/sources/trace?target=<path>&direction=in|out&hops=2`: Read-only file or symbol lineage over the sources graph (requires AnchorDB and a mapped `sources` role). Returns `200` with the honesty envelope (`asOf`, `asOfSource`, `server`, `warnings`); returns `503` when the sources role is unmapped, `400` without a target or with a bad direction.
 
 ## Operating System Support & Installing AnchorDB
 

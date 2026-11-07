@@ -315,12 +315,13 @@ export async function extractCode(ext, content) {
 function structureFromTree(grammar, tree) {
   const symbols = []
   const calls = []
-  const pushSymbol = (node, name, kind) => {
+  const pushSymbol = (node, name, kind, recvParam = null) => {
     symbols.push({
       name,
       kind,
       line: node.startPosition.row + 1,
-      lines: node.endPosition.row - node.startPosition.row + 1
+      lines: node.endPosition.row - node.startPosition.row + 1,
+      ...(recvParam ? { recvParam } : {})
     })
   }
   const visit = (node, cls) => {
@@ -367,7 +368,10 @@ function structureFromTree(grammar, tree) {
         const name = node.childForFieldName('name')
         const receiver = node.childForFieldName('receiver')
         const recvType = receiver && firstDescendant(receiver, 'type_identifier')
-        if (name && recvType) pushSymbol(node, `${recvType.text}.${name.text}`, 'method')
+        const recvVar = receiver && firstDescendant(receiver, 'identifier')
+        if (name && recvType) {
+          pushSymbol(node, `${recvType.text}.${name.text}`, 'method', recvVar ? recvVar.text : null)
+        }
       } else if (node.type === 'type_spec') {
         const name = node.childForFieldName('name')
         if (name) pushSymbol(node, name.text, 'type')

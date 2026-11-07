@@ -469,9 +469,13 @@ export async function buildSourcesGraph(rootAbs, files = null, options = {}) {
  * callee (`Recv.Method`, `pkg.Fn`) and prefers a symbol defined in the
  * same package directory.
  *
- * A receiver counts as evidence when it is an import binding, or when it
+ * A receiver counts as evidence when it is an import binding, when it
  * names a class-like type defined in this same file (`Foo.bar()` inside
- * Foo's own module). A same-file receiver resolves through its qualified
+ * Foo's own module), when it is `this`/`self` or the method's declared
+ * receiver parameter (e.g. `s.method()` in Go), or when the receiver variable
+ * name matches a known type name case-insensitively (`stitcher.RegisterRoute()`
+ * -> `Stitcher.RegisterRoute`). Otherwise it is skipped as local-receiver,
+ * never guessed. A same-file receiver resolves through its qualified
  * name only: the bare fallback (the bare call name) stays gated on import
  * evidence, so `s.logger.Log()` still cannot be absorbed by a single
  * project-wide `Log()`. Receiver evidence narrows the gate, not the
@@ -543,13 +547,13 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
     const ownRecv = Boolean(call.recv) && !importRecv && ownTypes.has(call.recv)
 
     // Same-instance receiver: this.method() in JS/TS, self.method() in Python,
-    // or method-to-method call within the same type in Go.
+    // or when call.recv matches the declared method receiver parameter (e.g. s.method() in Go).
     const ownerDot = owner.name.indexOf('.')
     const ownerType = ownerDot !== -1 ? owner.name.slice(0, ownerDot) : null
-    const sameInstance = Boolean(ownerType) && (
+    const sameInstance = !importRecv && Boolean(ownerType) && (
       call.recv === 'this' ||
       call.recv === 'self' ||
-      (ownTypes.has(ownerType) && symbolIndex.has(`${ownerType}.${call.name}`))
+      (owner.recvParam && call.recv === owner.recvParam)
     )
 
     // Receiver variable matching type name (e.g. stitcher.RegisterRoute() -> Stitcher.RegisterRoute).
@@ -578,13 +582,15 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
     // bare name.
     const candidates = !call.recv
       ? [call.name]
-      : sameInstance
-        ? [`${ownerType}.${call.name}`]
-        : recvTypeCandidate
-          ? [recvTypeCandidate]
-          : ownRecv
-            ? [`${call.recv}.${call.name}`]
-            : [`${call.recv}.${call.name}`, call.name]
+      : importRecv
+        ? [`${call.recv}.${call.name}`, call.name]
+        : sameInstance
+          ? [`${ownerType}.${call.name}`]
+          : recvTypeCandidate
+            ? [recvTypeCandidate]
+            : ownRecv
+              ? [`${call.recv}.${call.name}`]
+              : [`${call.recv}.${call.name}`, call.name]
     let hit = null
     let self = false
     let ambiguous = false

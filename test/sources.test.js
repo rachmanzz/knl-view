@@ -1294,6 +1294,50 @@ describe('same-file receiver resolution', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test('sources.trace.receiver-negative-foreign: foreign receiver parameter is skipped, never guessed', async () => {
+    const root = makeRepo()
+    try {
+      write(root, 'server.js', [
+        'class Server {',
+        '  initRouter() { return 1 }',
+        '  start(db) {',
+        '    db.initRouter()',
+        '  }',
+        '}'
+      ].join('\n'))
+
+      const { edges } = await buildSourcesGraph(root)
+      const calls = edges.filter((e) => e.type === 'calls')
+      assert.deepEqual(calls, [])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('sources.trace.receiver-import-precedence: import receiver wins over same-named enclosing method', async () => {
+    const root = makeRepo()
+    try {
+      write(root, 'logger.js', [
+        'export function init() { return 1 }'
+      ].join('\n'))
+      write(root, 'server.js', [
+        'import { init } from "./logger.js"',
+        'class Server {',
+        '  init() { return 2 }',
+        '  start() {',
+        '    init()',
+        '  }',
+        '}'
+      ].join('\n'))
+
+      const { edges } = await buildSourcesGraph(root)
+      const calls = edges.filter((e) => e.type === 'calls').map((e) => `${e.from}->${e.to}`)
+      assert.deepEqual(calls, ['server.js#Server.start->logger.js#init'])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('SOURCE_RELATIONS', () => {
