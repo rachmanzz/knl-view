@@ -147,9 +147,10 @@ export function buildAgentInstructionBlock(hasGraphify = false) {
 - KNL-View is the primary graph tool. For \`.knowledges\`, source graphs, external module graphs, and project graph questions, read the project's \`knl-view\` skill and use the relevant KNL-View feature first.
 ${fallback}## Strict Anti-Grep & Mandatory Trace-Before-Edit Protocol (Universal Enforcement)
 - **STRICT BAN ON AD-HOC GREP/FIND FOR CODE DISCOVERY**:
-  - STRICTLY FORBIDDEN to use \`grep\`, \`ripgrep\` (\`rg\`), or \`find\` to trace symbols, callers, callees, definitions, or internal codebase dependencies.
-  - Every relation lookup, caller function, callee function, and internal dependency MUST use \`knl-view sources trace --target=<path>#<symbol>\` or \`knl-view sources trace --target=<path>\`.
-  - \`grep\`/\`find\` is ONLY permitted for literal text searches (e.g. searching exact error messages, literal UI strings, or config keys/values), NEVER for navigating code or architecture.
+  - \`knl-view sources trace --target=<path>#<symbol>\` or \`knl-view sources trace --target=<path>\` is the MANDATORY primary tool for navigating codebase architecture, caller hierarchies, and dependencies.
+  - Blind ad-hoc \`grep\`/\`find\` as a lazy substitute for architectural graph navigation is strictly forbidden.
+  - \`grep\`/\`find\` is permitted for literal text searches (exact error messages, literal UI strings, or config values), and for cross-verifying call sites when a symbol trace returns \`in: []\` due to dynamic receiver dispatch.
+  - **CRITICAL AUDIT BOUNDARY (AR-16 / CEILING)**: \`in: []\` on a symbol trace does NOT prove zero callers; dynamic or variable receiver calls (\`obj.Method()\`) may be skipped as \`local-receiver\`. When auditing symbol connectivity, agents MUST cross-verify \`in: []\` by reading the code and using targeted literal search (\`grep -rn <symbol>\`) before concluding a symbol is uncalled.
 - **MANDATORY THREE-PHASE KNL-VIEW WORKFLOW**:
   1. **Pre-Edit Exploration (MANDATORY)**: Run \`knl-view sources trace --target=<path>\` (file lineage) or \`knl-view sources trace --target=<path>#<symbol>\` (call hierarchy) BEFORE touching or modifying files.
   2. **Deliberate Batch Edit**: Apply changes based strictly on semantic graph relationships mapped by KNL-View.
@@ -282,8 +283,10 @@ they exist on disk, never because a map says so.
 
 ## Hard Negative Constraints (Mandatory Rules)
 
-- **STRICTLY FORBIDDEN to use grep/ripgrep/find for tracing symbols, callers, or internal codebase dependencies.**
-  Every relation lookup, caller function, callee function, and internal dependency MUST use \`knl-view sources trace --target=<path>#<symbol>\` or \`knl-view sources trace --target=<path>\`. AI agents are strictly prohibited from defaulting back to \`grep -rn\` or \`find\` when tracing architecture or symbols. \`grep\`/\`find\` is permitted ONLY for literal text searches (e.g. exact error messages, literal UI strings, or config values), NEVER for mapping code relations or blast radius.
+- **STRICTLY FORBIDDEN to use blind ad-hoc grep/find for code discovery.**
+  \`knl-view sources trace --target=<path>#<symbol>\` or \`knl-view sources trace --target=<path>\` is the MANDATORY primary tool for navigating codebase architecture, caller hierarchies, and dependencies. AI agents are strictly prohibited from defaulting back to \`grep -rn\` or \`find\` as a lazy substitute for architectural graph navigation. \`grep\`/\`find\` is permitted for literal text searches (exact error messages, literal UI strings, or config values), and for cross-verifying call sites when a symbol trace returns \`in: []\` due to dynamic receiver dispatch.
+- **STRICTLY FORBIDDEN to assume in: [] on a symbol trace means "dead code" without code verification.**
+  \`knl-view sources trace\` is the primary tool for mapping caller hierarchies. However, method calls on dynamic/untyped receiver variables (\`obj.Method()\`) may be skipped (\`local-receiver\`) when concrete types cannot be determined from static AST. When verifying symbol connectivity (AR-16 / CEILING), if a symbol trace returns \`in: []\`, agents MUST cross-verify with targeted literal search (\`grep -rn <symbol>\`) and inspect caller implementation before claiming a symbol is uncalled.
 - **STRICTLY FORBIDDEN to inspect raw third-party dependency files directly.**
   For third-party dependencies (\`node_modules\`, \`go mod\`, \`site-packages\`, \`crates\`), never read raw library files directly. Build the module graph on-demand: \`knl-view modules build-graph <eco>::<module_name>\` and query API definitions and call hierarchies via \`knl-view modules trace <eco>::<module_name> [symbol]\` to save context tokens.
 - **STRICTLY FORBIDDEN to bypass KNL-View via direct AnchorWire/AnchorDB connections.**

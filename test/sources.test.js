@@ -1230,6 +1230,70 @@ describe('same-file receiver resolution', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test('sources.trace.receiver-this: this.method() in JS/TS links to method on the same class', async () => {
+    const root = makeRepo()
+    try {
+      write(root, 'server.js', [
+        'class Server {',
+        '  initRouter() { return 1 }',
+        '  start() {',
+        '    this.initRouter()',
+        '  }',
+        '}'
+      ].join('\n'))
+
+      const { edges } = await buildSourcesGraph(root)
+      const calls = edges.filter((e) => e.type === 'calls').map((e) => `${e.from}->${e.to}`)
+      assert.deepEqual(calls, ['server.js#Server.start->server.js#Server.initRouter'])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('sources.trace.receiver-type-match: variable matching type name links method (e.g. stitcher.RegisterRoute)', async () => {
+    const root = makeRepo()
+    try {
+      write(root, 'stitcher.js', [
+        'class Stitcher {',
+        '  RegisterRoute() { return 1 }',
+        '}',
+        'function main() {',
+        '  const stitcher = new Stitcher()',
+        '  stitcher.RegisterRoute()',
+        '}'
+      ].join('\n'))
+
+      const { edges } = await buildSourcesGraph(root)
+      const calls = edges.filter((e) => e.type === 'calls').map((e) => `${e.from}->${e.to}`).sort()
+      assert.deepEqual(calls, [
+        'stitcher.js#main->stitcher.js#Stitcher',
+        'stitcher.js#main->stitcher.js#Stitcher.RegisterRoute'
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('sources.trace.receiver-go-method: Go method receiver s.method() links to method on same struct', async () => {
+    const root = makeRepo()
+    try {
+      write(root, 'server.go', [
+        'package main',
+        'type Server struct{}',
+        'func (s *Server) initRouter() {}',
+        'func (s *Server) Start() {',
+        '  s.initRouter()',
+        '}'
+      ].join('\n'))
+
+      const { edges } = await buildSourcesGraph(root)
+      const calls = edges.filter((e) => e.type === 'calls').map((e) => `${e.from}->${e.to}`)
+      assert.deepEqual(calls, ['server.go#Server.Start->server.go#Server.initRouter'])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('SOURCE_RELATIONS', () => {

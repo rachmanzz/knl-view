@@ -541,7 +541,35 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
     const from = owner.id || `${fromRel}#${owner.name}`
     const importRecv = Boolean(call.recv) && importNames.has(call.recv)
     const ownRecv = Boolean(call.recv) && !importRecv && ownTypes.has(call.recv)
-    if (call.recv && !importRecv && !ownRecv) {
+
+    // Same-instance receiver: this.method() in JS/TS, self.method() in Python,
+    // or method-to-method call within the same type in Go.
+    const ownerDot = owner.name.indexOf('.')
+    const ownerType = ownerDot !== -1 ? owner.name.slice(0, ownerDot) : null
+    const sameInstance = Boolean(ownerType) && (
+      call.recv === 'this' ||
+      call.recv === 'self' ||
+      (ownTypes.has(ownerType) && symbolIndex.has(`${ownerType}.${call.name}`))
+    )
+
+    // Receiver variable matching type name (e.g. stitcher.RegisterRoute() -> Stitcher.RegisterRoute).
+    let recvTypeCandidate = null
+    if (call.recv && !importRecv && !ownRecv && !sameInstance) {
+      const lowerRecv = call.recv.toLowerCase()
+      for (const key of symbolIndex.keys()) {
+        const dot = key.indexOf('.')
+        if (dot !== -1 && key.slice(dot + 1) === call.name) {
+          const typeName = key.slice(0, dot)
+          if (typeName.toLowerCase() === lowerRecv) {
+            recvTypeCandidate = key
+            break
+          }
+        }
+      }
+    }
+
+    const hasReceiverEvidence = importRecv || ownRecv || sameInstance || Boolean(recvTypeCandidate)
+    if (call.recv && !hasReceiverEvidence) {
       skip(from, 'local-receiver')
       continue
     }
@@ -550,9 +578,13 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
     // bare name.
     const candidates = !call.recv
       ? [call.name]
-      : ownRecv
-        ? [`${call.recv}.${call.name}`]
-        : [`${call.recv}.${call.name}`, call.name]
+      : sameInstance
+        ? [`${ownerType}.${call.name}`]
+        : recvTypeCandidate
+          ? [recvTypeCandidate]
+          : ownRecv
+            ? [`${call.recv}.${call.name}`]
+            : [`${call.recv}.${call.name}`, call.name]
     let hit = null
     let self = false
     let ambiguous = false
