@@ -67,7 +67,7 @@ export function orderForIndex(nodes) {
 
   const byMap = [...withOrder].sort((a, b) => {
     if (a.order !== b.order) return a.order - b.order
-    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
+    if (a.type !== b.type) return a.type === 'file' ? -1 : 1
     return byName(a, b)
   })
 

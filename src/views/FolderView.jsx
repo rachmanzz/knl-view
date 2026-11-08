@@ -82,7 +82,7 @@ export default function FolderView({ route }) {
       {isEmpty && (
         <EmptyState
           level={2}
-          title={`$Empty folder ${node.name}/`}
+          title={`Empty folder ${node.name}/`}
           detail="No files or subfolders."
         >
           <button type="button" className="btn" onClick={() => window.location.reload()}>

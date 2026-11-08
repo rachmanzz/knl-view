@@ -588,9 +588,7 @@ export function resolveCallTargets(fromRel, file, symbolIndex, scanned) {
           ? [`${ownerType}.${call.name}`]
           : recvTypeCandidate
             ? [recvTypeCandidate]
-            : ownRecv
-              ? [`${call.recv}.${call.name}`]
-              : [`${call.recv}.${call.name}`, call.name]
+            : [`${call.recv}.${call.name}`]
     let hit = null
     let self = false
     let ambiguous = false

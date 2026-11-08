@@ -73,7 +73,7 @@ export default function Home() {
             <EmptyState
               level={2}
               title="Empty archive"
-              detail={`$No content yet. ${meta.root}`}
+              detail={`No content yet. ${meta.root}`}
             />
           )}
 

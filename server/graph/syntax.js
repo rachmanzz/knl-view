@@ -263,21 +263,9 @@ function specsFromTree(grammar, tree) {
 }
 
 /**
- * Parse one file's text with the grammar of its extension and return its
- * raw import specifiers. A syntax error never throws: tree-sitter recovers
- * and whatever imports are well-formed are still extracted.
- * @param {string} ext lowercase extension with the dot, e.g. '.go'
- * @param {string} content file text
- * @returns {Promise<string[]>}
- */
-export async function extractImportSpecifiers(ext, content) {
-  return (await extractCode(ext, content)).imports
-}
-
-/**
  * Parse one file once and extract everything the sources graph needs:
  *
- *   imports   raw import specifiers (see extractImportSpecifiers)
+ *   imports   raw import specifiers (specsFromTree)
  *   importNames local names those imports are addressed by: JS bindings
  *             (default/namespace/named, plus `const x = require/import`),
  *             Go aliases or last path segments. Evidence that a receiver
