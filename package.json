@@ -1,6 +1,6 @@
 {
   "name": "@rahmantech/knl-view",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Local viewer for .knowledges knowledge bases: a CLI and a web app, with an optional AnchorDB graph layer.",
   "type": "module",
   "license": "Apache-2.0",

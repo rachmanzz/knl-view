@@ -250,7 +250,7 @@ Each file also defines **symbol nodes**, extracted from the same parse:
 - Call resolution is conservative: a call belongs to its innermost enclosing symbol, and the callee must match exactly one definition project-wide (same package directory preferred in Go). A receiver-qualified call (`obj.Method()`) resolves when the receiver is an import binding of the file, names a class-like type declared in the same file, is `this`/`self` or the method's declared receiver parameter (e.g. `s.method()` in Go), or matches a known type name case-insensitively (`stitcher.RegisterRoute()` to `Stitcher.RegisterRoute`); otherwise it is skipped as `local-receiver`, never guessed.
 - Label text (symbol names and kinds; AnchorDB attributes are numeric-only) is written to `.knowledges/.knl-data/<path>.md`, one file per source file that has symbols; override the location with `labelDir` in the project config. Labels are regenerated and pruned on every sync.
 
-#### Supported Languages (v0.3.3)
+#### Supported Languages (v0.3.4)
 
 Tree-sitter WASM grammars run in-memory within Node.js without requiring host compilers:
 
